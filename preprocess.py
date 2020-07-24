@@ -11,6 +11,7 @@ import json
 from conllu import parse
 from ufal.udpipe import Model, Pipeline, ProcessingError
 from tqdm import tqdm
+from utils import PAD
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--data_path", type=str, default=os.path.join("clean_vs_hate_speech", "val.csv"),
@@ -36,7 +37,7 @@ def process_conllu(conllu_data):
             universal_features = curr_token["feats"]
             if universal_features is not None:
                 curr_features.update(universal_features)
-            curr_features.update({"upostag": curr_token.get("upostag", "N/A")})
+            curr_features.update({"upostag": curr_token.get("upostag", PAD)})
             converted_sent.append(curr_features)
         processed.append(converted_sent)
 
