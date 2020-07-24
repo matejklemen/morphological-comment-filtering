@@ -112,10 +112,10 @@ class Trainer:
         train_loss = 0.0
 
         for curr_batch in tqdm(DataLoader(train_dataset, batch_size=self.batch_size, shuffle=False)):
-            batch_labels = curr_batch["labels"]
+            batch_labels = curr_batch["labels"].to(DEVICE)
             del curr_batch["labels"]
             logits = self.model(**curr_batch)  # [B, num_labels]
-            curr_loss = self.loss(logits, batch_labels.to(DEVICE))
+            curr_loss = self.loss(logits, batch_labels)
             train_loss += float(curr_loss)
 
             curr_loss.backward()
@@ -132,11 +132,11 @@ class Trainer:
             num_correct = 0
 
             for curr_batch in tqdm(DataLoader(dev_dataset, batch_size=self.batch_size, shuffle=False)):
-                batch_labels = curr_batch["labels"]
+                batch_labels = curr_batch["labels"].to(DEVICE)
                 del curr_batch["labels"]
                 logits = self.model(**curr_batch)  # [B, num_labels]
 
-                curr_loss = self.loss(logits, batch_labels.to(DEVICE))
+                curr_loss = self.loss(logits, batch_labels)
                 dev_loss += float(curr_loss)
 
                 label_preds = torch.argmax(logits, dim=1)
