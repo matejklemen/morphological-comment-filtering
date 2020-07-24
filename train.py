@@ -7,6 +7,7 @@ import time
 from tqdm import tqdm
 from transformers import BertModel
 from torch.utils.data import DataLoader, Subset
+from utils import UPOS2IDX, UFEATS2IDX, PAD
 import argparse
 
 logging.basicConfig(level=logging.INFO)
@@ -28,8 +29,28 @@ parser.add_argument("--early_stopping_rounds", type=int, default=5)
 parser.add_argument("--validate_every_n_examples", type=int, default=5_000)
 parser.add_argument("--max_seq_len", type=int, default=192)
 
-parser.add_argument("--include_upostag", action="store_true")  # TODO
-parser.add_argument("--include_ufeats", action="store_true")  # TODO
+parser.add_argument("--include_upostag", action="store_true")
+parser.add_argument("--upostag_emb_size", type=int, default=50)
+parser.add_argument("--include_ufeats", action="store_true")
+parser.add_argument("--ufeats_emb_size", type=int, default=15)
+
+
+class MeanPooler(nn.Module):
+    """ Wrapper for torch.mean to be used inside a Sequential module"""
+    def __init__(self, dim=0):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, data):
+        return torch.mean(data, dim=self.dim)
+
+
+class LastLSTMTimestepPooler(nn.Module):
+    """ Wrapper for extraction of LSTM (last) hidden state of last time step to be used inside a Sequential module.
+        The assumption here is that `batch_first=True` in LSTM. """
+    def forward(self, data):
+        last_layer_hiddens = data[0]
+        return last_layer_hiddens[:, -1, :]  # [B, hidden_size]
 
 
 class MorphologicalBertForSequenceClassification(nn.Module):
@@ -43,18 +64,33 @@ class MorphologicalBertForSequenceClassification(nn.Module):
         self.additional_features = additional_features if additional_features is not None else {}
         self.pooling_type = pooling_type
         if len(self.additional_features) > 0 and self.pooling_type is None:
-            self.pooling_type = "average"
+            self.pooling_type = "mean"
 
         # classic: linear(dropout(BERT(input_data)))
         self.bert_model = BertModel.from_pretrained(self.pretrained_model_name_or_path,
                                                     num_labels=num_labels).to(DEVICE)
-        self.classifier = nn.Linear(self.bert_model.config.hidden_size,  # TODO: + embedding sizes of additional features
-                                    out_features=self.num_labels).to(DEVICE)
 
-        # TODO: include embeddings for features (maybe ModuleLists, involving embedding->pool)
-        self.embedders = nn.ModuleDict()
+        self.classifier = nn.Linear(self.bert_model.config.hidden_size + sum(self.additional_features.values()),
+                                    out_features=self.num_labels).to(DEVICE)
+        self.processors = nn.ModuleDict()
         for feature_name, emb_size in self.additional_features.items():
-            pass
+            num_embeddings = len(UPOS2IDX) if feature_name == "upostag" else len(UFEATS2IDX[feature_name])
+            padding_idx = UPOS2IDX[PAD] if feature_name == "upostag" else UFEATS2IDX[feature_name][PAD]
+            embedder = nn.Embedding(num_embeddings=num_embeddings,
+                                    embedding_dim=emb_size,
+                                    padding_idx=padding_idx)
+            if self.pooling_type == "mean":
+                # data -> emb(data) -> mean across sequence
+                self.processors[feature_name] = nn.Sequential(embedder, MeanPooler(dim=1))
+            elif self.pooling_type == "lstm":
+                # data -> emb(data) -> LSTM -> last hidden state of last timestep
+                self.processors[feature_name] = nn.Sequential(embedder,
+                                                              # TODO: maybe this LSTM should be common for all added features
+                                                              nn.LSTM(input_size=emb_size, hidden_size=emb_size,
+                                                                      batch_first=True),
+                                                              LastLSTMTimestepPooler())
+            else:
+                raise NotImplementedError("pooling_type should be one of {'mean', 'lstm'}")
 
     @staticmethod
     def from_pretrained(model_dir):
@@ -69,6 +105,15 @@ class MorphologicalBertForSequenceClassification(nn.Module):
         _, pooled_output = self.bert_model(input_ids=input_ids.to(DEVICE),
                                            token_type_ids=token_type_ids.to(DEVICE),
                                            attention_mask=attention_mask.to(DEVICE))
+        additional_processed = []
+        for feature_name in self.additional_features:
+            curr_input = kwargs[f"{feature_name}_ids"] * kwargs[f"{feature_name}_mask"]
+            curr_processed = self.processors[feature_name](curr_input)
+            additional_processed.append(curr_processed)
+
+        if len(additional_processed) > 0:
+            additional_processed = torch.cat(additional_processed, dim=1)
+            pooled_output = torch.cat((pooled_output, additional_processed), dim=1)
 
         logits = self.classifier(F.dropout(pooled_output, p=self.dropout))
         return logits
@@ -76,7 +121,8 @@ class MorphologicalBertForSequenceClassification(nn.Module):
 
 class Trainer:
     def __init__(self, num_labels, batch_size=16, dropout=0.2, lr=2e-5, early_stopping_rounds=5,
-                 validate_every_n_steps=5_000, model_name=None, pretrained_model_name_or_path=None):
+                 validate_every_n_steps=5_000, model_name=None, pretrained_model_name_or_path=None,
+                 additional_features=None):
         """ `additional_features` is a dict with names and embedding sizes of additional features to consider"""
         self.model_name = time.strftime("%Y%m%d_%H%M%S") if model_name is None else model_name
         self.lr = lr
@@ -84,6 +130,7 @@ class Trainer:
         self.batch_size = batch_size
         self.validate_every_n_steps = validate_every_n_steps
         self.early_stopping_rounds = early_stopping_rounds
+        self.additional_features = list(additional_features.keys()) if additional_features is not None else []
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
         if self.pretrained_model_name_or_path is None:
             logging.warning("A pretrained model name or path was not specified, defaulting to base uncased mBERT")
@@ -91,7 +138,7 @@ class Trainer:
         self.model = MorphologicalBertForSequenceClassification(num_labels=num_labels,
                                                                 dropout=dropout,
                                                                 pretrained_model_name_or_path=self.pretrained_model_name_or_path,
-                                                                additional_features=None,
+                                                                additional_features=additional_features,
                                                                 pooling_type=None)
         self.loss = nn.CrossEntropyLoss()
         self.optimizer = optim.AdamW(self.model.parameters(), lr=lr)
@@ -202,28 +249,36 @@ if __name__ == "__main__":
     tokenizer = BertTokenizer.from_pretrained(args.pretrained_model_name_or_path)
 
     logging.info("Loading training dataset")
-    train_df = pd.read_csv(args.train_path)
+    train_df = pd.read_csv(args.train_path)[:100]
     train_features = list(map(lambda features_str: json.loads(features_str), train_df["features"].values))
     train_dataset = SequenceDataset(sequences=train_df["content"].values,
                                     labels=train_df["infringed_on_rule"].values,
                                     tokenizer=tokenizer,
                                     max_seq_len=args.max_seq_len,
                                     additional_features=train_features,
-                                    ufeats_names=None)  # TODO
+                                    ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)  # TODO
 
     dev_df, dev_features, dev_dataset = None, None, None
     if args.dev_path:
         logging.info("Loading validation dataset")
-        dev_df = pd.read_csv(args.dev_path)
+        dev_df = pd.read_csv(args.dev_path)[:10]
         dev_features = list(map(lambda features_str: json.loads(features_str), dev_df["features"].values))
         dev_dataset = SequenceDataset(sequences=dev_df["content"].values,
                                       labels=dev_df["infringed_on_rule"].values,
                                       tokenizer=tokenizer,
                                       max_seq_len=args.max_seq_len,
                                       additional_features=dev_features,
-                                      ufeats_names=None)  # TODO
+                                      ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)  # TODO
 
     num_labels = len(train_df["infringed_on_rule"].value_counts())
+
+    feature_sizes = {}
+    if args.include_upostag:
+        feature_sizes["upostag"] = args.upostag_emb_size
+
+    if args.include_ufeats:
+        for f in list(UPOS2IDX.keys()):
+            feature_sizes[f] = args.ufeats_emb_size
 
     trainer = Trainer(model_name=args.model_name,
                       num_labels=num_labels,
@@ -232,5 +287,6 @@ if __name__ == "__main__":
                       lr=args.lr,
                       early_stopping_rounds=args.early_stopping_rounds,
                       validate_every_n_steps=args.validate_every_n_examples,
-                      pretrained_model_name_or_path=args.pretrained_model_name_or_path)
+                      pretrained_model_name_or_path=args.pretrained_model_name_or_path,
+                      additional_features=feature_sizes)
     trainer.run(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
