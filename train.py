@@ -233,4 +233,4 @@ if __name__ == "__main__":
                       early_stopping_rounds=args.early_stopping_rounds,
                       validate_every_n_steps=args.validate_every_n_examples,
                       pretrained_model_name_or_path=args.pretrained_model_name_or_path)
-    trainer.run(train_dataset, num_epochs=1, dev_dataset=dev_dataset)
+    trainer.run(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
