@@ -33,6 +33,8 @@ parser.add_argument("--include_upostag", action="store_true")
 parser.add_argument("--upostag_emb_size", type=int, default=50)
 parser.add_argument("--include_ufeats", action="store_true")
 parser.add_argument("--ufeats_emb_size", type=int, default=15)
+# TODO: pooler option
+# ...
 
 
 class MeanPooler(nn.Module):
@@ -81,14 +83,14 @@ class MorphologicalBertForSequenceClassification(nn.Module):
                                     padding_idx=padding_idx)
             if self.pooling_type == "mean":
                 # data -> emb(data) -> mean across sequence
-                self.processors[feature_name] = nn.Sequential(embedder, MeanPooler(dim=1))
+                self.processors[feature_name] = nn.Sequential(embedder, MeanPooler(dim=1)).to(DEVICE)
             elif self.pooling_type == "lstm":
                 # data -> emb(data) -> LSTM -> last hidden state of last timestep
                 self.processors[feature_name] = nn.Sequential(embedder,
                                                               # TODO: maybe this LSTM should be common for all added features
                                                               nn.LSTM(input_size=emb_size, hidden_size=emb_size,
                                                                       batch_first=True),
-                                                              LastLSTMTimestepPooler())
+                                                              LastLSTMTimestepPooler()).to(DEVICE)
             else:
                 raise NotImplementedError("pooling_type should be one of {'mean', 'lstm'}")
 
@@ -107,7 +109,7 @@ class MorphologicalBertForSequenceClassification(nn.Module):
                                            attention_mask=attention_mask.to(DEVICE))
         additional_processed = []
         for feature_name in self.additional_features:
-            curr_input = kwargs[f"{feature_name}_ids"] * kwargs[f"{feature_name}_mask"]
+            curr_input = kwargs[f"{feature_name}_ids"].to(DEVICE) * kwargs[f"{feature_name}_mask"].to(DEVICE)
             curr_processed = self.processors[feature_name](curr_input)
             additional_processed.append(curr_processed)
 
