@@ -115,7 +115,7 @@ class Trainer:
             batch_labels = curr_batch["labels"]
             del curr_batch["labels"]
             logits = self.model(**curr_batch)  # [B, num_labels]
-            curr_loss = self.loss(logits, batch_labels)
+            curr_loss = self.loss(logits, batch_labels.to(DEVICE))
             train_loss += float(curr_loss)
 
             curr_loss.backward()
@@ -136,7 +136,7 @@ class Trainer:
                 del curr_batch["labels"]
                 logits = self.model(**curr_batch)  # [B, num_labels]
 
-                curr_loss = self.loss(logits, batch_labels)
+                curr_loss = self.loss(logits, batch_labels.to(DEVICE))
                 dev_loss += float(curr_loss)
 
                 label_preds = torch.argmax(logits, dim=1)
