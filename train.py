@@ -37,14 +37,17 @@ parser.add_argument("--ufeats_emb_size", type=int, default=15)
 # ...
 
 
-class MeanPooler(nn.Module):
+class MaskedMeanPooler(nn.Module):
     """ Wrapper for torch.mean to be used inside a Sequential module"""
-    def __init__(self, dim=0):
+    def __init__(self, dim=1):
         super().__init__()
         self.dim = dim
 
-    def forward(self, data):
-        return torch.mean(data, dim=self.dim)
+    def forward(self, data, masks):
+        # data... [B, max_seq_len, emb_size]
+        # masks... [B, max_seq_len]
+        masked_data = data * masks.unsqueeze(2)
+        return torch.sum(masked_data, dim=self.dim)
 
 
 class LastLSTMTimestepPooler(nn.Module):
@@ -65,8 +68,8 @@ class MorphologicalBertForSequenceClassification(nn.Module):
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
         self.additional_features = additional_features if additional_features is not None else {}
         self.pooling_type = pooling_type
-        if len(self.additional_features) > 0 and self.pooling_type is None:
-            self.pooling_type = "mean"
+        if len(self.additional_features) > 0:
+            self.pooler = MaskedMeanPooler(dim=1).to(DEVICE)  # TODO: try different types of combinations, e.g. attention, LSTM
 
         # classic: linear(dropout(BERT(input_data)))
         self.bert_model = BertModel.from_pretrained(self.pretrained_model_name_or_path,
@@ -74,43 +77,34 @@ class MorphologicalBertForSequenceClassification(nn.Module):
 
         self.classifier = nn.Linear(self.bert_model.config.hidden_size + sum(self.additional_features.values()),
                                     out_features=self.num_labels).to(DEVICE)
-        self.processors = nn.ModuleDict()
+        self.embedders = nn.ModuleDict()
         for feature_name, emb_size in self.additional_features.items():
+            logging.info(f"Initializing embedding layer of size {emb_size} for features '{feature_name}'")
             num_embeddings = len(UPOS2IDX) if feature_name == "upostag" else len(UFEATS2IDX[feature_name])
             padding_idx = UPOS2IDX[PAD] if feature_name == "upostag" else UFEATS2IDX[feature_name][PAD]
-            embedder = nn.Embedding(num_embeddings=num_embeddings,
-                                    embedding_dim=emb_size,
-                                    padding_idx=padding_idx)
-            if self.pooling_type == "mean":
-                # data -> emb(data) -> mean across sequence
-                self.processors[feature_name] = nn.Sequential(embedder, MeanPooler(dim=1)).to(DEVICE)
-            elif self.pooling_type == "lstm":
-                # data -> emb(data) -> LSTM -> last hidden state of last timestep
-                self.processors[feature_name] = nn.Sequential(embedder,
-                                                              # TODO: maybe this LSTM should be common for all added features
-                                                              nn.LSTM(input_size=emb_size, hidden_size=emb_size,
-                                                                      batch_first=True),
-                                                              LastLSTMTimestepPooler()).to(DEVICE)
-            else:
-                raise NotImplementedError("pooling_type should be one of {'mean', 'lstm'}")
+
+            # data -> emb(data) -> mean across sequence
+            self.embedders[feature_name] = nn.Embedding(num_embeddings=num_embeddings,
+                                                        embedding_dim=emb_size,
+                                                        padding_idx=padding_idx).to(DEVICE)
 
     @staticmethod
     def from_pretrained(model_dir):
         pass
 
-    @staticmethod
-    def save_pretrained(model_dir):
+    def save_pretrained(self, model_dir):
         pass
 
-    def forward(self, input_ids, token_type_ids, attention_mask, **kwargs):  # TODO
+    def forward(self, input_ids, token_type_ids, attention_mask, **kwargs):
         # Classic BERT sequence classification settings: last layer's hidden state for [CLS] token: [B, hidden_size]
         _, pooled_output = self.bert_model(input_ids=input_ids.to(DEVICE),
                                            token_type_ids=token_type_ids.to(DEVICE),
                                            attention_mask=attention_mask.to(DEVICE))
         additional_processed = []
         for feature_name in self.additional_features:
-            curr_input = kwargs[f"{feature_name}_ids"].to(DEVICE) * kwargs[f"{feature_name}_mask"].to(DEVICE)
-            curr_processed = self.processors[feature_name](curr_input)
+            curr_input = kwargs[f"{feature_name}_ids"].to(DEVICE)
+            curr_masks = kwargs[f"{feature_name}_mask"].to(DEVICE)
+            curr_processed = self.pooler(data=self.embedders[feature_name](curr_input), masks=curr_masks)
             additional_processed.append(curr_processed)
 
         if len(additional_processed) > 0:
@@ -258,7 +252,7 @@ if __name__ == "__main__":
                                     tokenizer=tokenizer,
                                     max_seq_len=args.max_seq_len,
                                     additional_features=train_features,
-                                    ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)  # TODO
+                                    ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
 
     dev_df, dev_features, dev_dataset = None, None, None
     if args.dev_path:
@@ -270,7 +264,7 @@ if __name__ == "__main__":
                                       tokenizer=tokenizer,
                                       max_seq_len=args.max_seq_len,
                                       additional_features=dev_features,
-                                      ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)  # TODO
+                                      ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
 
     num_labels = len(train_df["infringed_on_rule"].value_counts())
 
