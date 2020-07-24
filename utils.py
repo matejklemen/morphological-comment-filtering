@@ -197,11 +197,11 @@ class SequenceDataset(Dataset):
         }
 
         if self.has_upos:
-            return_dict["upos_ids"] = self.upos[index]
-            return_dict["upos_mask"] = self.upos_masks[index]
+            return_dict["upostag_ids"] = self.upos[index]
+            return_dict["upostag_mask"] = self.upos_masks[index]
 
         for curr_ufeat_name in self.ufeats_names:
-            return_dict[curr_ufeat_name] = self.ufeats[curr_ufeat_name][index]
+            return_dict[f"{curr_ufeat_name}_ids"] = self.ufeats[curr_ufeat_name][index]
             return_dict[f"{curr_ufeat_name}_mask"] = self.ufeats_masks[curr_ufeat_name][index]
 
         return return_dict
