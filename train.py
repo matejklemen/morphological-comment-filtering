@@ -5,12 +5,31 @@ import torch.nn.functional as F
 import logging
 import time
 from tqdm import tqdm
-from transformers import BertModel, BertTokenizer
+from transformers import BertModel
 from torch.utils.data import DataLoader, Subset
+import argparse
 
 logging.basicConfig(level=logging.INFO)
 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 logging.info(f"Using device {DEVICE}")
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--train_path", type=str, default="preprocessed/train.csv")
+parser.add_argument("--dev_path", type=str, default="preprocessed/val.csv")
+
+parser.add_argument("--model_name", type=str, default=None)
+parser.add_argument("--pretrained_model_name_or_path", type=str, default="bert-base-multilingual-uncased")
+
+parser.add_argument("--batch_size", type=int, default=16)
+parser.add_argument("--num_epochs", type=int, default=5)
+parser.add_argument("--lr", type=float, default=2e-5)
+parser.add_argument("--dropout", type=float, default=0.2)
+parser.add_argument("--early_stopping_rounds", type=int, default=5)
+parser.add_argument("--validate_every_n_examples", type=int, default=5_000)
+parser.add_argument("--max_seq_len", type=int, default=192)
+
+parser.add_argument("--include_upostag", action="store_true")  # TODO
+parser.add_argument("--include_ufeats", action="store_true")  # TODO
 
 
 class MorphologicalBertForSequenceClassification(nn.Module):
@@ -71,7 +90,9 @@ class Trainer:
 
         self.model = MorphologicalBertForSequenceClassification(num_labels=num_labels,
                                                                 dropout=dropout,
-                                                                pretrained_model_name_or_path=self.pretrained_model_name_or_path)
+                                                                pretrained_model_name_or_path=self.pretrained_model_name_or_path,
+                                                                additional_features=None,
+                                                                pooling_type=None)
         self.loss = nn.CrossEntropyLoss()
         self.optimizer = optim.AdamW(self.model.parameters(), lr=lr)
 
@@ -153,7 +174,7 @@ class Trainer:
                 logging.info(f"Validation accuracy: {dev_metrics['accuracy']:.4f}")
                 if dev_metrics["accuracy"] > best_dev_acc:
                     best_dev_acc, rounds_no_increase = dev_metrics["accuracy"], 0
-                    logging.info(f"New best, saving checkpoint")
+                    logging.info(f"New best, saving checkpoint TODO")
                     # TODO: save checkpoint
                     # ...
                 else:
@@ -176,16 +197,40 @@ if __name__ == "__main__":
     from transformers import BertTokenizer
     import json
     import pandas as pd
+    args = parser.parse_args()
 
-    dev_df = pd.read_csv("preprocessed/val.csv")
-    features = list(map(lambda features_str: json.loads(features_str), dev_df["features"].values))
+    tokenizer = BertTokenizer.from_pretrained(args.pretrained_model_name_or_path)
 
-    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-    dev_dataset = SequenceDataset(sequences=dev_df["content"].values,
-                                  labels=dev_df["infringed_on_rule"].values,
-                                  tokenizer=tokenizer,
-                                  max_seq_len=192,
-                                  additional_features=features)
+    logging.info("Loading training dataset")
+    train_df = pd.read_csv(args.train_path)
+    train_features = list(map(lambda features_str: json.loads(features_str), train_df["features"].values))
+    train_dataset = SequenceDataset(sequences=train_df["content"].values,
+                                    labels=train_df["infringed_on_rule"].values,
+                                    tokenizer=tokenizer,
+                                    max_seq_len=args.max_seq_len,
+                                    additional_features=train_features,
+                                    ufeats_names=None)  # TODO
 
-    trainer = Trainer(num_labels=2, batch_size=8, pretrained_model_name_or_path="bert-base-uncased", validate_every_n_steps=500)
-    trainer.run(dev_dataset, num_epochs=1, dev_dataset=dev_dataset)
+    dev_df, dev_features, dev_dataset = None, None, None
+    if args.dev_path:
+        logging.info("Loading validation dataset")
+        dev_df = pd.read_csv(args.dev_path)
+        dev_features = list(map(lambda features_str: json.loads(features_str), dev_df["features"].values))
+        dev_dataset = SequenceDataset(sequences=dev_df["content"].values,
+                                      labels=dev_df["infringed_on_rule"].values,
+                                      tokenizer=tokenizer,
+                                      max_seq_len=args.max_seq_len,
+                                      additional_features=dev_features,
+                                      ufeats_names=None)  # TODO
+
+    num_labels = len(train_df["infringed_on_rule"].value_counts())
+
+    trainer = Trainer(model_name=args.model_name,
+                      num_labels=num_labels,
+                      batch_size=args.batch_size,
+                      dropout=args.dropout,
+                      lr=args.lr,
+                      early_stopping_rounds=args.early_stopping_rounds,
+                      validate_every_n_steps=args.validate_every_n_examples,
+                      pretrained_model_name_or_path=args.pretrained_model_name_or_path)
+    trainer.run(train_dataset, num_epochs=1, dev_dataset=dev_dataset)
