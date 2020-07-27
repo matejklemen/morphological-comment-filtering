@@ -33,12 +33,11 @@ parser.add_argument("--include_upostag", action="store_true")
 parser.add_argument("--upostag_emb_size", type=int, default=50)
 parser.add_argument("--include_ufeats", action="store_true")
 parser.add_argument("--ufeats_emb_size", type=int, default=15)
-# TODO: pooler option
-# ...
+parser.add_argument("--pooling_type", type=str, default="mean")
 
 
 class MaskedMeanPooler(nn.Module):
-    """ Wrapper for torch.mean to be used inside a Sequential module"""
+    """ Computes mean over elements whose mask is 1"""
     def __init__(self, dim=1):
         super().__init__()
         self.dim = dim
@@ -50,12 +49,28 @@ class MaskedMeanPooler(nn.Module):
         return torch.sum(masked_data, dim=self.dim)
 
 
-class LastLSTMTimestepPooler(nn.Module):
-    """ Wrapper for extraction of LSTM (last) hidden state of last time step to be used inside a Sequential module.
-        The assumption here is that `batch_first=True` in LSTM. """
-    def forward(self, data):
-        last_layer_hiddens = data[0]
-        return last_layer_hiddens[:, -1, :]  # [B, hidden_size]
+class LSTMPooler(nn.Module):
+    """Applies LSTM over sequences where the mask is 1"""
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.lstm = nn.LSTM(hidden_size, hidden_size, batch_first=True).to(DEVICE)
+
+    def forward(self, data, masks):
+        # data... [B, max_seq_len, emb_size]
+        # masks... [B, max_seq_len]
+        batch_size, max_seq_len = masks.shape
+        bool_masks = masks.bool()
+        hidden = 0.1 * torch.rand((1, batch_size, self.hidden_size), dtype=torch.float32, device=DEVICE, requires_grad=True) - 0.05
+        cell = 0.1 * torch.rand((1, batch_size, self.hidden_size), dtype=torch.float32, device=DEVICE, requires_grad=True) - 0.05
+        for idx_step in range(max_seq_len):
+            last_hidden, (curr_hid, curr_cell) = self.lstm(data[bool_masks[:, idx_step], idx_step].unsqueeze(1),
+                                                           (hidden[:, bool_masks[:, idx_step], :],
+                                                            cell[:, bool_masks[:, idx_step], :]))
+            hidden[:, bool_masks[:, idx_step], :] = curr_hid
+            cell[:, bool_masks[:, idx_step], :] = curr_cell
+
+        return hidden[0]  # [B, hidden_size]
 
 
 class MorphologicalBertForSequenceClassification(nn.Module):
@@ -69,7 +84,13 @@ class MorphologicalBertForSequenceClassification(nn.Module):
         self.additional_features = additional_features if additional_features is not None else {}
         self.pooling_type = pooling_type
         if len(self.additional_features) > 0:
-            self.pooler = MaskedMeanPooler(dim=1).to(DEVICE)  # TODO: try different types of combinations, e.g. attention, LSTM
+            if pooling_type == "lstm":
+                hid_size = additional_features["upostag"]
+                logging.info(f"Initializing LSTM pooler with hidden state size {hid_size}")
+                self.pooler = LSTMPooler(hidden_size=hid_size).to(DEVICE)
+            else:
+                logging.info(f"Initializing mean pooler")
+                self.pooler = MaskedMeanPooler(dim=1).to(DEVICE)  # TODO: try different types of combinations, e.g. attention, LSTM
 
         # classic: linear(dropout(BERT(input_data)))
         self.bert_model = BertModel.from_pretrained(self.pretrained_model_name_or_path,
@@ -118,7 +139,7 @@ class MorphologicalBertForSequenceClassification(nn.Module):
 class Trainer:
     def __init__(self, num_labels, batch_size=16, dropout=0.2, lr=2e-5, early_stopping_rounds=5,
                  validate_every_n_steps=5_000, model_name=None, pretrained_model_name_or_path=None,
-                 additional_features=None):
+                 additional_features=None, pooling_type=None):
         """ `additional_features` is a dict with names and embedding sizes of additional features to consider"""
         self.model_name = time.strftime("%Y%m%d_%H%M%S") if model_name is None else model_name
         self.lr = lr
@@ -135,7 +156,7 @@ class Trainer:
                                                                 dropout=dropout,
                                                                 pretrained_model_name_or_path=self.pretrained_model_name_or_path,
                                                                 additional_features=additional_features,
-                                                                pooling_type=None)
+                                                                pooling_type=pooling_type)
         self.loss = nn.CrossEntropyLoss()
         self.optimizer = optim.AdamW(self.model.parameters(), lr=lr)
 
@@ -284,5 +305,6 @@ if __name__ == "__main__":
                       early_stopping_rounds=args.early_stopping_rounds,
                       validate_every_n_steps=args.validate_every_n_examples,
                       pretrained_model_name_or_path=args.pretrained_model_name_or_path,
-                      additional_features=feature_sizes)
+                      additional_features=feature_sizes,
+                      pooling_type=args.pooling_type)
     trainer.run(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
