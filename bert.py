@@ -278,7 +278,7 @@ if __name__ == "__main__":
     tokenizer = BertTokenizer.from_pretrained(args.pretrained_model_name_or_path)
 
     logging.info("Loading training dataset")
-    train_df = pd.read_csv(args.train_path)[:16]
+    train_df = pd.read_csv(args.train_path)
     train_features = list(map(lambda features_str: json.loads(features_str), train_df["features"].values))
     train_dataset = SequenceDataset(sequences=train_df["content"].values,
                                     labels=train_df["infringed_on_rule"].values,
@@ -290,7 +290,7 @@ if __name__ == "__main__":
     dev_df, dev_features, dev_dataset = None, None, None
     if args.dev_path:
         logging.info("Loading validation dataset")
-        dev_df = pd.read_csv(args.dev_path)[:16]
+        dev_df = pd.read_csv(args.dev_path)
         dev_features = list(map(lambda features_str: json.loads(features_str), dev_df["features"].values))
         dev_dataset = SequenceDataset(sequences=dev_df["content"].values,
                                       labels=dev_df["infringed_on_rule"].values,
