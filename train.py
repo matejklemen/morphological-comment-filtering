@@ -60,17 +60,10 @@ class LSTMPooler(nn.Module):
         # data... [B, max_seq_len, emb_size]
         # masks... [B, max_seq_len]
         batch_size, max_seq_len = masks.shape
-        bool_masks = masks.bool()
-        hidden = 0.1 * torch.rand((1, batch_size, self.hidden_size), dtype=torch.float32, device=DEVICE, requires_grad=True) - 0.05
-        cell = 0.1 * torch.rand((1, batch_size, self.hidden_size), dtype=torch.float32, device=DEVICE, requires_grad=True) - 0.05
-        for idx_step in range(max_seq_len):
-            last_hidden, (curr_hid, curr_cell) = self.lstm(data[bool_masks[:, idx_step], idx_step].unsqueeze(1),
-                                                           (hidden[:, bool_masks[:, idx_step], :],
-                                                            cell[:, bool_masks[:, idx_step], :]))
-            hidden[:, bool_masks[:, idx_step], :] = curr_hid
-            cell[:, bool_masks[:, idx_step], :] = curr_cell
+        bool_masks = masks.bool()  # TODO: mask the PAD tokens somehow? (has problems with a CUDA runtime error)
 
-        return hidden[0]  # [B, hidden_size]
+        _, (last_hidden, _) = self.lstm(data)
+        return last_hidden[0]  # [B, emb_size]
 
 
 class MorphologicalBertForSequenceClassification(nn.Module):
