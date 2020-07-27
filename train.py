@@ -49,6 +49,22 @@ class MaskedMeanPooler(nn.Module):
         return torch.sum(masked_data, dim=self.dim)
 
 
+class WeightedSumPooler(nn.Module):
+    """ Computes a weighted combination of embeddings (including PAD!) by compressing embeddings into single numbers
+        and renormalizing them. """
+    def __init__(self, embedding_size, dim=1):
+        super().__init__()
+        self.dim = dim
+        self.linear = nn.Linear(embedding_size, out_features=1)
+
+    def forward(self, data, masks):
+        # data... [B, max_seq_len, emb_size]
+        # masks... [B, max_seq_len]
+        weights = F.softmax(self.linear(data), dim=self.dim)
+        weighted_comb = torch.sum(weights * data, dim=self.dim)
+        return weighted_comb  # [B, emb_size]
+
+
 class LSTMPooler(nn.Module):
     """Applies LSTM over sequences where the mask is 1"""
     def __init__(self, hidden_size):
@@ -81,6 +97,9 @@ class MorphologicalBertForSequenceClassification(nn.Module):
                 hid_size = additional_features["upostag"]
                 logging.info(f"Initializing LSTM pooler with hidden state size {hid_size}")
                 self.pooler = LSTMPooler(hidden_size=hid_size).to(DEVICE)
+            elif pooling_type == "weighted":
+                logging.info(f"Initializing weighted sum pooler")
+                self.pooler = WeightedSumPooler(embedding_size=additional_features["upostag"])
             else:
                 logging.info(f"Initializing mean pooler")
                 self.pooler = MaskedMeanPooler(dim=1).to(DEVICE)  # TODO: try different types of combinations, e.g. attention, LSTM
