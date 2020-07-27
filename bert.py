@@ -148,7 +148,7 @@ class MorphologicalBertForSequenceClassification(nn.Module):
         return logits
 
 
-class Trainer:
+class BertController:
     def __init__(self, num_labels, batch_size=16, dropout=0.2, lr=2e-5, early_stopping_rounds=5,
                  validate_every_n_steps=5_000, model_name=None, pretrained_model_name_or_path=None,
                  additional_features=None, pooling_type=None):
@@ -223,7 +223,7 @@ class Trainer:
                 "accuracy": num_correct / len(dev_dataset)
             }
 
-    def run(self, train_dataset, num_epochs, dev_dataset=None):
+    def fit(self, train_dataset, num_epochs, dev_dataset=None):
         best_dev_acc, rounds_no_increase = 0.0, 0
         stop_early = False
 
@@ -278,7 +278,7 @@ if __name__ == "__main__":
     tokenizer = BertTokenizer.from_pretrained(args.pretrained_model_name_or_path)
 
     logging.info("Loading training dataset")
-    train_df = pd.read_csv(args.train_path)
+    train_df = pd.read_csv(args.train_path)[:16]
     train_features = list(map(lambda features_str: json.loads(features_str), train_df["features"].values))
     train_dataset = SequenceDataset(sequences=train_df["content"].values,
                                     labels=train_df["infringed_on_rule"].values,
@@ -290,7 +290,7 @@ if __name__ == "__main__":
     dev_df, dev_features, dev_dataset = None, None, None
     if args.dev_path:
         logging.info("Loading validation dataset")
-        dev_df = pd.read_csv(args.dev_path)
+        dev_df = pd.read_csv(args.dev_path)[:16]
         dev_features = list(map(lambda features_str: json.loads(features_str), dev_df["features"].values))
         dev_dataset = SequenceDataset(sequences=dev_df["content"].values,
                                       labels=dev_df["infringed_on_rule"].values,
@@ -306,17 +306,17 @@ if __name__ == "__main__":
         feature_sizes["upostag"] = args.upostag_emb_size
 
     if args.include_ufeats:
-        for f in list(UPOS2IDX.keys()):
+        for f in list(UFEATS2IDX.keys()):
             feature_sizes[f] = args.ufeats_emb_size
 
-    trainer = Trainer(model_name=args.model_name,
-                      num_labels=num_labels,
-                      batch_size=args.batch_size,
-                      dropout=args.dropout,
-                      lr=args.lr,
-                      early_stopping_rounds=args.early_stopping_rounds,
-                      validate_every_n_steps=args.validate_every_n_examples,
-                      pretrained_model_name_or_path=args.pretrained_model_name_or_path,
-                      additional_features=feature_sizes,
-                      pooling_type=args.pooling_type)
-    trainer.run(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
+    trainer = BertController(model_name=args.model_name,
+                             num_labels=num_labels,
+                             batch_size=args.batch_size,
+                             dropout=args.dropout,
+                             lr=args.lr,
+                             early_stopping_rounds=args.early_stopping_rounds,
+                             validate_every_n_steps=args.validate_every_n_examples,
+                             pretrained_model_name_or_path=args.pretrained_model_name_or_path,
+                             additional_features=feature_sizes,
+                             pooling_type=args.pooling_type)
+    trainer.fit(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
