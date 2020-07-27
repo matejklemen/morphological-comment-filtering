@@ -92,17 +92,8 @@ class MorphologicalBertForSequenceClassification(nn.Module):
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
         self.additional_features = additional_features if additional_features is not None else {}
         self.pooling_type = pooling_type
-        if len(self.additional_features) > 0:
-            if pooling_type == "lstm":
-                hid_size = additional_features["upostag"]
-                logging.info(f"Initializing LSTM pooler with hidden state size {hid_size}")
-                self.pooler = LSTMPooler(hidden_size=hid_size).to(DEVICE)
-            elif pooling_type == "weighted":
-                logging.info(f"Initializing weighted sum pooler")
-                self.pooler = WeightedSumPooler(embedding_size=additional_features["upostag"]).to(DEVICE)
-            else:
-                logging.info(f"Initializing mean pooler")
-                self.pooler = MaskedMeanPooler(dim=1).to(DEVICE)  # TODO: try different types of combinations, e.g. attention, LSTM
+        if len(self.additional_features) == 0:
+            self.pooling_type = "N/A"
 
         # classic: linear(dropout(BERT(input_data)))
         self.bert_model = BertModel.from_pretrained(self.pretrained_model_name_or_path,
@@ -110,7 +101,8 @@ class MorphologicalBertForSequenceClassification(nn.Module):
 
         self.classifier = nn.Linear(self.bert_model.config.hidden_size + sum(self.additional_features.values()),
                                     out_features=self.num_labels).to(DEVICE)
-        self.embedders = nn.ModuleDict()
+        self.embedders, self.poolers = nn.ModuleDict(), nn.ModuleDict()
+        common_pooler = MaskedMeanPooler().to(DEVICE)
         for feature_name, emb_size in self.additional_features.items():
             logging.info(f"Initializing embedding layer of size {emb_size} for features '{feature_name}'")
             num_embeddings = len(UPOS2IDX) if feature_name == "upostag" else len(UFEATS2IDX[feature_name])
@@ -120,6 +112,25 @@ class MorphologicalBertForSequenceClassification(nn.Module):
             self.embedders[feature_name] = nn.Embedding(num_embeddings=num_embeddings,
                                                         embedding_dim=emb_size,
                                                         padding_idx=padding_idx).to(DEVICE)
+            if self.pooling_type == "lstm":
+                logging.info(f"Initializing LSTM pooler with hidden state size {emb_size}")
+                self.poolers[feature_name] = LSTMPooler(hidden_size=emb_size).to(DEVICE)
+            elif self.pooling_type == "weighted":
+                logging.info(f"Initializing weighted sum pooler")
+                self.pooler = WeightedSumPooler(embedding_size=additional_features["upostag"]).to(DEVICE)
+            else:
+                logging.info(f"Initializing mean pooler")
+                self.pooling_type = "mean"
+                self.poolers[feature_name] = common_pooler
+
+    def config(self):
+        return {
+            "model_type": "bert",
+            "num_labels": self.num_labels,
+            "based_on": self.pretrained_model_name_or_path,
+            "additional_features": self.additional_features,
+            "pooling_type": self.pooling_type
+        }
 
     @staticmethod
     def from_pretrained(model_dir):
@@ -133,11 +144,15 @@ class MorphologicalBertForSequenceClassification(nn.Module):
         _, pooled_output = self.bert_model(input_ids=input_ids.to(DEVICE),
                                            token_type_ids=token_type_ids.to(DEVICE),
                                            attention_mask=attention_mask.to(DEVICE))
+
+        # Concatenate pooled POS tag / universal features embeddings for sequence to BERT sequence representation
         additional_processed = []
         for feature_name in self.additional_features:
             curr_input = kwargs[f"{feature_name}_ids"].to(DEVICE)
             curr_masks = kwargs[f"{feature_name}_mask"].to(DEVICE)
-            curr_processed = self.pooler(data=self.embedders[feature_name](curr_input), masks=curr_masks)
+            curr_pooler = self.poolers[feature_name]
+            curr_processed = curr_pooler(data=F.dropout(self.embedders[feature_name](curr_input), p=self.dropout),
+                                         masks=curr_masks)
             additional_processed.append(curr_processed)
 
         if len(additional_processed) > 0:
@@ -163,6 +178,7 @@ class BertController:
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
         if self.pretrained_model_name_or_path is None:
             logging.warning("A pretrained model name or path was not specified, defaulting to base uncased mBERT")
+            self.pretrained_model_name_or_path = "bert-base-multilingual-uncased"
 
         self.model = MorphologicalBertForSequenceClassification(num_labels=num_labels,
                                                                 dropout=dropout,
