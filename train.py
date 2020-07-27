@@ -55,7 +55,7 @@ class WeightedSumPooler(nn.Module):
     def __init__(self, embedding_size, dim=1):
         super().__init__()
         self.dim = dim
-        self.linear = nn.Linear(embedding_size, out_features=1)
+        self.linear = nn.Linear(embedding_size, out_features=1).to(DEVICE)
 
     def forward(self, data, masks):
         # data... [B, max_seq_len, emb_size]
@@ -99,7 +99,7 @@ class MorphologicalBertForSequenceClassification(nn.Module):
                 self.pooler = LSTMPooler(hidden_size=hid_size).to(DEVICE)
             elif pooling_type == "weighted":
                 logging.info(f"Initializing weighted sum pooler")
-                self.pooler = WeightedSumPooler(embedding_size=additional_features["upostag"])
+                self.pooler = WeightedSumPooler(embedding_size=additional_features["upostag"]).to(DEVICE)
             else:
                 logging.info(f"Initializing mean pooler")
                 self.pooler = MaskedMeanPooler(dim=1).to(DEVICE)  # TODO: try different types of combinations, e.g. attention, LSTM
