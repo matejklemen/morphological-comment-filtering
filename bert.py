@@ -297,7 +297,7 @@ if __name__ == "__main__":
     train_df = pd.read_csv(args.train_path)
     train_features = list(map(lambda features_str: json.loads(features_str), train_df["features"].values))
     train_dataset = SequenceDataset(sequences=train_df["content"].values,
-                                    labels=train_df["infringed_on_rule"].values,
+                                    labels=train_df["target"].values,
                                     tokenizer=tokenizer,
                                     max_seq_len=args.max_seq_len,
                                     additional_features=train_features,
@@ -309,13 +309,13 @@ if __name__ == "__main__":
         dev_df = pd.read_csv(args.dev_path)
         dev_features = list(map(lambda features_str: json.loads(features_str), dev_df["features"].values))
         dev_dataset = SequenceDataset(sequences=dev_df["content"].values,
-                                      labels=dev_df["infringed_on_rule"].values,
+                                      labels=dev_df["target"].values,
                                       tokenizer=tokenizer,
                                       max_seq_len=args.max_seq_len,
                                       additional_features=dev_features,
                                       ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
 
-    num_labels = len(train_df["infringed_on_rule"].value_counts())
+    num_labels = len(train_df["target"].value_counts())
 
     feature_sizes = {}
     if args.include_upostag:

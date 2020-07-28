@@ -1,5 +1,5 @@
 """ The following script is used to preprocess text once and cache it to a csv file. Currently, this means obtaining
-    the UPOS tags and universal features.
+    the UPOS tags and universal features + renaming columns to a common format.
 
     This is done because it's quite a long process and we do not want to do it every time we make a change. """
 
@@ -17,6 +17,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--data_path", type=str, default=os.path.join("clean_vs_hate_speech", "val.csv"),
                     help="PATH to your data")
 parser.add_argument("--data_column", type=str, default="content",
+                    help="Column of csv in which the text to be processed is stored")
+parser.add_argument("--target_column", type=str, default="infringed_on_rule",
                     help="Column of csv in which the text to be processed is stored")
 parser.add_argument("--target_dir", type=str, default="preprocessed",
                     help="DIRECTORY where processed data should be stored")
@@ -71,6 +73,7 @@ if __name__ == "__main__":
     target_path = os.path.join(args.target_dir, file_name)
 
     df["features"] = features
+    df = df.rename({args.data_column: "content", args.target_column: "target"}, axis=1)
     df.to_csv(os.path.join(args.target_dir, file_name), index=False)
 
 
