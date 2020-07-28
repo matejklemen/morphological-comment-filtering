@@ -285,7 +285,7 @@ class BertController:
 
 
 if __name__ == "__main__":
-    from utils import SequenceDataset, UFEATS2IDX
+    from utils import BertDataset, UFEATS2IDX
     from transformers import BertTokenizer
     import json
     import pandas as pd
@@ -296,12 +296,12 @@ if __name__ == "__main__":
     logging.info("Loading training dataset")
     train_df = pd.read_csv(args.train_path)
     train_features = list(map(lambda features_str: json.loads(features_str), train_df["features"].values))
-    train_dataset = SequenceDataset(sequences=train_df["content"].values,
-                                    labels=train_df["target"].values,
-                                    tokenizer=tokenizer,
-                                    max_seq_len=args.max_seq_len,
-                                    additional_features=train_features,
-                                    ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
+    train_dataset = BertDataset(sequences=train_df["content"].values,
+                                labels=train_df["target"].values,
+                                tokenizer=tokenizer,
+                                max_seq_len=args.max_seq_len,
+                                additional_features=train_features,
+                                ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
 
     dev_df, dev_features, dev_dataset = None, None, None
     if args.dev_path:

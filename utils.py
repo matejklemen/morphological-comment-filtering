@@ -91,7 +91,108 @@ UFEATS2IDX = {
 }
 
 
-class SequenceDataset(Dataset):
+class FastTextLSTMDataset(Dataset):
+    def __init__(self, sequences, labels, max_seq_len, ft_embedder, additional_features, label_encoding=None, ufeats_names=None):
+        """ Very similar to SequenceDataset (-> TODO: change name to BERTDataset),
+            the difference being that here the sequences are tokenized into words and so POS tags / ufeats don't need
+            to be aligned to subwords. """
+        self.ufeats_names = ufeats_names if ufeats_names is not None else []
+        self.has_upos, self.has_ufeats = False, len(self.ufeats_names) > 0
+
+        # Basic features (always present)
+        self.inputs, self.labels = [], []
+        self.input_masks = []
+        # Additional features (required for some models)
+        self.upos, self.upos_masks = [], []
+        self.ufeats = {u: [] for u in self.ufeats_names}
+        self.ufeats_masks = {u: [] for u in self.ufeats_names}
+
+        for i in range(10):  # range(len(sequences)):
+            self.labels.append(labels[i] if label_encoding is None else label_encoding[labels[i]])
+            flat_features = list(chain(*additional_features[i]))
+
+            # [Features for current example]
+            curr_tokens = []
+            curr_masks = []
+            upos_features, upos_masks = [], []
+            ufeats = {u: [] for u in self.ufeats_names}
+            ufeats_masks = {u: [] for u in self.ufeats_names}
+
+            for token_info in flat_features[: max_seq_len]:
+                # Note: expecting pre-tokenized data (see preprocess.py)
+                curr_tokens.append(token_info["form"])
+                curr_masks.append(1)
+
+                curr_upos = token_info.get("upostag")
+                if curr_upos is not None:
+                    upos_features.append(UPOS2IDX[curr_upos])
+                    upos_masks.append(1)
+
+                for curr_ufeat_name in self.ufeats_names:
+                    curr_ufeat = token_info.get(curr_ufeat_name, PAD)
+                    # Sometimes, ufeats might have multiple values associated - take first one as a simplification
+                    feat_values = curr_ufeat.split(",")
+                    if len(feat_values) > 1:
+                        curr_ufeat = feat_values[0]
+
+                    encoded_ufeat = UFEATS2IDX[curr_ufeat_name][curr_ufeat]
+                    ufeats[curr_ufeat_name].append(encoded_ufeat)
+                    ufeats_masks[curr_ufeat_name].append(curr_ufeat != PAD)
+
+            # [1, max_seq_len, 300)
+            self.inputs.append(torch.cat((ft_embedder[curr_tokens],
+                                          torch.zeros((max_seq_len - len(curr_tokens), 300), dtype=torch.float32))).unsqueeze(0))
+            self.input_masks.append((curr_masks + [0] * (max_seq_len - len(curr_masks)))[: max_seq_len])
+
+            # Pad encoded UPOS tags and masks to max sequence length, additionally masking out [CLS] and [SEP]
+            if upos_features:
+                self.has_upos = True
+                upos_features = (upos_features + [UPOS2IDX[PAD]] * (max_seq_len - len(upos_features)))[: max_seq_len]
+                upos_masks = (upos_masks + [0] * (max_seq_len - len(upos_masks)))[: max_seq_len]
+                self.upos.append(upos_features)
+                self.upos_masks.append(upos_masks)
+
+            # Pad encoded universal features and masks to max sequence length, additionally masking out [CLS] and [SEP]
+            for curr_ufeat_name in self.ufeats_names:
+                curr_ufeats = ufeats[curr_ufeat_name]
+                padded_ufeats = (curr_ufeats + [UFEATS2IDX[curr_ufeat_name][PAD]] * (max_seq_len - len(curr_ufeats)))
+                trimmed_ufeats = padded_ufeats[: max_seq_len]
+                self.ufeats[curr_ufeat_name].append(trimmed_ufeats)
+
+                curr_ufeats_masks = ufeats_masks[curr_ufeat_name]
+                padded_ufeats_masks = (curr_ufeats_masks + [0] * (max_seq_len - len(curr_ufeats_masks)))
+                trimmed_ufeats_masks = padded_ufeats_masks[: max_seq_len]
+                self.ufeats_masks[curr_ufeat_name].append(trimmed_ufeats_masks)
+
+        self.inputs, self.labels = torch.cat(self.inputs), torch.tensor(self.labels)
+        self.input_masks = torch.tensor(self.input_masks)
+        self.upos, self.upos_masks = torch.tensor(self.upos), torch.tensor(self.upos_masks)
+        for curr_ufeat_name in self.ufeats_names:
+            self.ufeats[curr_ufeat_name] = torch.tensor(self.ufeats[curr_ufeat_name])
+            self.ufeats_masks[curr_ufeat_name] = torch.tensor(self.ufeats_masks[curr_ufeat_name])
+
+    def __getitem__(self, index):
+        return_dict = {
+            "input_ids": self.inputs[index],
+            "input_mask": self.input_masks[index],
+            "labels": self.labels[index]
+        }
+
+        if self.has_upos:
+            return_dict["upostag_ids"] = self.upos[index]
+            return_dict["upostag_mask"] = self.upos_masks[index]
+
+        for curr_ufeat_name in self.ufeats_names:
+            return_dict[f"{curr_ufeat_name}_ids"] = self.ufeats[curr_ufeat_name][index]
+            return_dict[f"{curr_ufeat_name}_mask"] = self.ufeats_masks[curr_ufeat_name][index]
+
+        return return_dict
+
+    def __len__(self):
+        return self.inputs.shape[0]
+
+
+class BertDataset(Dataset):
     def __init__(self, sequences, labels, tokenizer, max_seq_len, label_encoding=None,
                  additional_features=None, ufeats_names=None):
         """
@@ -210,58 +311,24 @@ class SequenceDataset(Dataset):
         return self.inputs.shape[0]
 
 
-# TODO: remove this as it won't be needed any longer (see SequenceDataset)
-def create_bert_example(seq, tokenizer, max_seq_len=300):
-    """
-        seq: str
-            The comment that is to be classified
-        max_seq_len: int
-            Maximum length of sequence
-
-        Example of how encoding works (total number of tokens is `max_seq_len`)
-        Tokens:     [CLS] The quick brown fox jumps over the lazy dog [SEP] [PAD] ...
-        Segments:     0    0    0     0    0    0    0    0    0   0    0     0
-        Mask:         1    1    1     1    1    1    1    1    1   1    1     0
-    """
-    tokens = tokenizer.tokenize(seq)
-    if len(tokens) > max_seq_len - 2:
-        # allow space for [CLS] at start and [SEP] in the middle
-        tokens = tokens[: max_seq_len - 2]
-    tokens = [tokenizer.cls_token] + tokens + [tokenizer.sep_token]
-    segments = [0] * max_seq_len
-    # determines which tokens are valid and which are just padded for batching
-    mask = [1] * len(tokens) + [0] * (max_seq_len - len(tokens))
-
-    tokens += [tokenizer.pad_token] * (max_seq_len - len(tokens))
-
-    return tokenizer.convert_tokens_to_ids(tokens), segments, mask
-
-# TODO: remove this as it won't be needed any longer (see SequenceDataset)
-def load_data(path, tokenizer):
-    inps, seg, mask, y = [], [], [], []
-    data = pd.read_csv(path)
-    for idx_example in range(data.shape[0]):
-        # [0] = example, [1] = label
-        curr_data, curr_seg, curr_mask = create_bert_example(data.iloc[idx_example, 0], tokenizer)
-        curr_label = data.iloc[idx_example, 1]
-        inps.append(curr_data)
-        seg.append(curr_seg)
-        mask.append(curr_mask)
-        y.append(curr_label)
-
-    return torch.tensor(inps), torch.tensor(seg), torch.tensor(mask), torch.tensor(y)
-
-
 if __name__ == "__main__":
+    from torchnlp.word_to_vector import FastText
     from transformers import BertTokenizer
     import json
-    df = pd.read_csv("preprocessed/val.csv")
+    df = pd.read_csv("preprocessed/val.csv")[:10]
     features = list(map(lambda features_str: json.loads(features_str), df["features"].values))
 
     tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-    dataset = SequenceDataset(sequences=df["content"].values,
-                              labels=df["infringed_on_rule"].values,
-                              tokenizer=tokenizer,
-                              max_seq_len=10,
-                              additional_features=features,
-                              ufeats_names=list(UFEATS2IDX.keys()))
+    dataset1 = BertDataset(sequences=df["content"].values,
+                           labels=df["target"].values,
+                           tokenizer=tokenizer,
+                           max_seq_len=192,
+                           additional_features=features,
+                           ufeats_names=list(UFEATS2IDX.keys()))
+
+    dataset2 = FastTextLSTMDataset(sequences=df["content"].values,
+                                   labels=df["target"].values,
+                                   max_seq_len=76,
+                                   ft_embedder=FastText(language="hr", cache="models"),
+                                   additional_features=features,
+                                   ufeats_names=list(UFEATS2IDX.keys()))
