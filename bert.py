@@ -117,7 +117,7 @@ class MorphologicalBertForSequenceClassification(nn.Module):
                 self.poolers[feature_name] = LSTMPooler(hidden_size=emb_size).to(DEVICE)
             elif self.pooling_type == "weighted":
                 logging.info(f"Initializing weighted sum pooler")
-                self.pooler = WeightedSumPooler(embedding_size=additional_features["upostag"]).to(DEVICE)
+                self.poolers[feature_name] = WeightedSumPooler(embedding_size=additional_features["upostag"]).to(DEVICE)
             else:
                 logging.info(f"Initializing mean pooler")
                 self.pooling_type = "mean"
