@@ -93,9 +93,8 @@ UFEATS2IDX = {
 
 class FastTextLSTMDataset(Dataset):
     def __init__(self, sequences, labels, max_seq_len, ft_embedder, additional_features, label_encoding=None, ufeats_names=None):
-        """ Very similar to SequenceDataset (-> TODO: change name to BERTDataset),
-            the difference being that here the sequences are tokenized into words and so POS tags / ufeats don't need
-            to be aligned to subwords. """
+        """ Very similar to BertDataset, the difference being that here the sequences are tokenized into words and
+        so POS tags / ufeats don't need to be aligned to subwords. """
         self.ufeats_names = ufeats_names if ufeats_names is not None else []
         self.has_upos, self.has_ufeats = False, len(self.ufeats_names) > 0
 
@@ -107,7 +106,7 @@ class FastTextLSTMDataset(Dataset):
         self.ufeats = {u: [] for u in self.ufeats_names}
         self.ufeats_masks = {u: [] for u in self.ufeats_names}
 
-        for i in range(10):  # range(len(sequences)):
+        for i in range(len(sequences)):
             self.labels.append(labels[i] if label_encoding is None else label_encoding[labels[i]])
             flat_features = list(chain(*additional_features[i]))
 
