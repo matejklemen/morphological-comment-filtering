@@ -28,8 +28,8 @@ parser.add_argument("--dev_path", type=str, default="preprocessed/val.csv")
 parser.add_argument("--embedding_size", type=int, default=300)  # Note: fastText = 300d by default
 parser.add_argument("--hidden_size", type=int, default=256)
 parser.add_argument("--bidirectional", action="store_true")
-parser.add_argument("--batch_size", type=int, default=16)
-parser.add_argument("--num_epochs", type=int, default=5)
+parser.add_argument("--batch_size", type=int, default=128)
+parser.add_argument("--num_epochs", type=int, default=50)
 parser.add_argument("--lr", type=float, default=0.001)
 parser.add_argument("--dropout", type=float, default=0.2)
 parser.add_argument("--early_stopping_rounds", type=int, default=5)
@@ -63,7 +63,7 @@ class MorphologicalLSTMForSequenceClassification(nn.Module):
                             batch_first=True,
                             bidirectional=bidirectional).to(DEVICE)
 
-        self.classifier = nn.Linear(hidden_size + sum(self.additional_features.values()),
+        self.classifier = nn.Linear(self.num_directions * hidden_size + sum(self.additional_features.values()),
                                     out_features=self.num_labels).to(DEVICE)
         self.embedders, self.poolers = nn.ModuleDict(), nn.ModuleDict()
         common_pooler = MaskedMeanPooler().to(DEVICE)
@@ -90,14 +90,25 @@ class MorphologicalLSTMForSequenceClassification(nn.Module):
     def forward(self, input_ids, input_mask, **kwargs):
         # input_ids: [B, max_seq_len, emb_size] -> EMBEDDINGS, not raw tokens!
         # input mask: [B, max_seq_len]
-        batch_size = input_ids.shape[0]
+        batch_size, max_seq_len, _ = input_ids.shape
+        bool_masks = input_mask.bool()
+        hiddens = torch.zeros((self.num_directions, batch_size, self.hidden_size)).to(DEVICE)
+        cells = torch.zeros((self.num_directions, batch_size, self.hidden_size)).to(DEVICE)
 
-        # Use last hidden state as a summary of sequence
-        _, (last_hid, _) = self.lstm(input_mask.unsqueeze(2).to(DEVICE) * input_ids.to(DEVICE))
+        for time_step in range(max_seq_len):
+            curr_mask = bool_masks[:, time_step]
+            curr_input = input_ids[curr_mask, time_step].unsqueeze(1).to(DEVICE)  # [B', 1, emb_size]
+            curr_hids = hiddens[:, curr_mask]
+            curr_cells = cells[:, curr_mask]
+            if curr_input.shape[0] == 0:
+                break
+            _, (last_hid, last_cell) = self.lstm(curr_input, (curr_hids, curr_cells))
 
-        # Concatenate the LSTM directions, i.e. unpacked_hid = [LSTM_l2r, LSTM_r2l]
-        output = F.dropout(last_hid.transpose(0, 1).reshape(batch_size, self.num_directions * self.hidden_size),
-                           p=self.dropout)  # [B, hidden_size]
+            hiddens[:, curr_mask] = last_hid
+            cells[:, curr_mask] = last_cell
+
+        # Use last hidden state as a summary of sequence: [B, hidden_size] or [B, 2 * hidden_size] if using biLSTM
+        output = hiddens.transpose(0, 1).reshape(batch_size, self.num_directions * self.hidden_size)
 
         # Concatenate pooled POS tag / universal features embeddings for sequence to LSTM sequence representation
         additional_processed = []
@@ -245,6 +256,8 @@ if __name__ == "__main__":
                                         ft_embedder=ft,
                                         additional_features=train_features,
                                         ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
+
+    num_zero_embs = torch.sum(torch.sum(train_dataset.inputs, dim=2) == 0, dim=1)
 
     dev_df, dev_features, dev_dataset = None, None, None
     if args.dev_path:
