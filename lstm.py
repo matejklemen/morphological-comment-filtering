@@ -30,7 +30,7 @@ parser.add_argument("--hidden_size", type=int, default=256)
 parser.add_argument("--bidirectional", action="store_true")
 parser.add_argument("--batch_size", type=int, default=16)
 parser.add_argument("--num_epochs", type=int, default=5)
-parser.add_argument("--lr", type=float, default=2e-5)
+parser.add_argument("--lr", type=float, default=0.001)
 parser.add_argument("--dropout", type=float, default=0.2)
 parser.add_argument("--early_stopping_rounds", type=int, default=5)
 parser.add_argument("--validate_every_n_examples", type=int, default=5_000)
@@ -61,7 +61,7 @@ class MorphologicalLSTMForSequenceClassification(nn.Module):
         self.lstm = nn.LSTM(input_size=embedding_size,
                             hidden_size=hidden_size,
                             batch_first=True,
-                            bidirectional=bidirectional)
+                            bidirectional=bidirectional).to(DEVICE)
 
         self.classifier = nn.Linear(hidden_size + sum(self.additional_features.values()),
                                     out_features=self.num_labels).to(DEVICE)
@@ -93,7 +93,7 @@ class MorphologicalLSTMForSequenceClassification(nn.Module):
         batch_size = input_ids.shape[0]
 
         # Use last hidden state as a summary of sequence
-        _, (last_hid, _) = self.lstm(input_mask.unsqueeze(2) * input_ids)
+        _, (last_hid, _) = self.lstm(input_mask.unsqueeze(2).to(DEVICE) * input_ids.to(DEVICE))
 
         # Concatenate the LSTM directions, i.e. unpacked_hid = [LSTM_l2r, LSTM_r2l]
         output = F.dropout(last_hid.transpose(0, 1).reshape(batch_size, self.num_directions * self.hidden_size),
@@ -134,7 +134,7 @@ class LSTMController:
                                                                 bidirectional=bidirectional,
                                                                 dropout=dropout,
                                                                 additional_features=additional_features,
-                                                                pooling_type=pooling_type)
+                                                                pooling_type=pooling_type).to(DEVICE)
         self.loss = nn.CrossEntropyLoss()
         self.optimizer = optim.AdamW(self.model.parameters(), lr=lr)
 
