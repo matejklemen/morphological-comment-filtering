@@ -17,8 +17,9 @@ from pooling import MaskedMeanPooler, WeightedSumPooler, LSTMPooler
 is_kaggle = os.path.exists("/kaggle/input")
 log_to_stdout = print if is_kaggle else logging.info
 
-DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 logging.basicConfig(level=logging.INFO)
+DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+log_to_stdout(f"Using device {DEVICE}")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_name", type=str, default=None)
