@@ -90,6 +90,9 @@ UFEATS2IDX = {
     }
 }
 
+DEFAULT_POOLING_TYPE = "mean"
+DEFAULT_MODEL_DIR = "models"
+
 
 class FastTextLSTMDataset(Dataset):
     def __init__(self, sequences, labels, max_seq_len, ft_embedder, additional_features, label_encoding=None, ufeats_names=None):

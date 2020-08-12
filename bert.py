@@ -1,17 +1,19 @@
+import argparse
+import json
+import logging
+import os
+import time
+
 import torch
-import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
-import logging
-import time
+import torch.optim as optim
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 from transformers import BertModel
-from torch.utils.data import DataLoader, Subset
-from utils import UPOS2IDX, UFEATS2IDX, PAD
-import argparse
-import os
 
 from pooling import MaskedMeanPooler, WeightedSumPooler, LSTMPooler
+from utils import UPOS2IDX, UFEATS2IDX, PAD, DEFAULT_POOLING_TYPE, DEFAULT_MODEL_DIR
 
 # A bit of a hack so that `print` is used instead of `log` on kaggle since that doesn't seem to work properly there
 is_kaggle = os.path.exists("/kaggle/input")
@@ -22,11 +24,16 @@ DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 log_to_stdout(f"Using device {DEVICE}")
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--mode", type=str, choices=["train", "evaluate"], required=True)
 parser.add_argument("--train_path", type=str, default="preprocessed/train.csv")
 parser.add_argument("--dev_path", type=str, default="preprocessed/val.csv")
+parser.add_argument("--test_path", type=str, default="preprocessed/test.csv")
+parser.add_argument("--model_dir", type=str, default=None,
+                    help="Directory of the trained morphological BERT. Required for evaluation")
 
 parser.add_argument("--model_name", type=str, default=None)
-parser.add_argument("--pretrained_model_name_or_path", type=str, default="bert-base-multilingual-uncased")
+parser.add_argument("--pretrained_model_name_or_path", type=str, default="bert-base-multilingual-uncased",
+                    help="Name or directory of the used pretrained BERT model")
 
 parser.add_argument("--batch_size", type=int, default=16)
 parser.add_argument("--num_epochs", type=int, default=5)
@@ -34,7 +41,7 @@ parser.add_argument("--lr", type=float, default=2e-5)
 parser.add_argument("--dropout", type=float, default=0.2)
 parser.add_argument("--early_stopping_rounds", type=int, default=5)
 parser.add_argument("--validate_every_n_examples", type=int, default=5_000)
-parser.add_argument("--max_seq_len", type=int, default=192)
+parser.add_argument("--max_seq_len", type=int, default=10)
 
 parser.add_argument("--include_upostag", action="store_true")
 parser.add_argument("--upostag_emb_size", type=int, default=50)
@@ -52,9 +59,7 @@ class MorphologicalBertForSequenceClassification(nn.Module):
         self.dropout = dropout
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
         self.additional_features = additional_features if additional_features is not None else {}
-        self.pooling_type = pooling_type
-        if len(self.additional_features) == 0:
-            self.pooling_type = "N/A"
+        self.pooling_type = pooling_type if pooling_type is not None else DEFAULT_POOLING_TYPE
 
         # classic: linear(dropout(BERT(input_data)))
         self.bert_model = BertModel.from_pretrained(self.pretrained_model_name_or_path,
@@ -81,24 +86,17 @@ class MorphologicalBertForSequenceClassification(nn.Module):
                 self.poolers[feature_name] = WeightedSumPooler(embedding_size=emb_size).to(DEVICE)
             else:
                 log_to_stdout(f"Initializing mean pooler")
-                self.pooling_type = "mean"
                 self.poolers[feature_name] = common_pooler
 
+    @property
     def config(self):
         return {
-            "model_type": "bert",
             "num_labels": self.num_labels,
-            "based_on": self.pretrained_model_name_or_path,
+            "pretrained_model_name_or_path": self.pretrained_model_name_or_path,
+            "dropout": self.dropout,
             "additional_features": self.additional_features,
             "pooling_type": self.pooling_type
         }
-
-    @staticmethod
-    def from_pretrained(model_dir):
-        pass
-
-    def save_pretrained(self, model_dir):
-        pass
 
     def forward(self, input_ids, token_type_ids, attention_mask, **kwargs):
         # Classic BERT sequence classification settings: last layer's hidden state for [CLS] token: [B, hidden_size]
@@ -130,6 +128,9 @@ class BertController:
                  additional_features=None, pooling_type=None):
         """ `additional_features` is a dict with names and embedding sizes of additional features to consider"""
         self.model_name = time.strftime("%Y%m%d_%H%M%S") if model_name is None else model_name
+        self.model_dir = os.path.join(DEFAULT_MODEL_DIR, self.model_name)
+        os.makedirs(self.model_dir, exist_ok=True)
+
         self.lr = lr
         self.num_labels = num_labels
         self.batch_size = batch_size
@@ -145,21 +146,48 @@ class BertController:
                                                                 dropout=dropout,
                                                                 pretrained_model_name_or_path=self.pretrained_model_name_or_path,
                                                                 additional_features=additional_features,
-                                                                pooling_type=pooling_type)
+                                                                pooling_type=pooling_type)  # type: nn.Module
         self.loss = nn.CrossEntropyLoss()
         self.optimizer = optim.AdamW(self.model.parameters(), lr=lr)
 
-    def custom_config(self):
-        # TODO: should return properties to enable reconstruction of the custom parts of this model
-        pass
+        config_path = os.path.join(self.model_dir, "config.json")
+        if not os.path.exists(config_path):  # don't override existing config file (if using `from_pretrained()`)
+            with open(config_path, "w") as f_config:
+                logging.info(f"Saving model config file to '{config_path}'")
+                json.dump(self.config, fp=f_config, indent=4)
+
+    @property
+    def config(self):
+        params = dict(self.model.config)
+        params.update({
+            "model_name": self.model_name,
+            "batch_size": self.batch_size,
+            "early_stopping_rounds": self.early_stopping_rounds,
+            "validate_every_n_steps": self.validate_every_n_steps
+        })
+
+        return params
 
     def save_checkpoint(self):
-        pass
+        weights_path = os.path.join(self.model_dir, "weights.th")
+        torch.save(self.model.state_dict(), weights_path)
 
     def load_checkpoint(self):
-        pass
+        weights_path = os.path.join(self.model_dir, "weights.th")
+        if os.path.isfile(weights_path):
+            self.model.load_state_dict(torch.load(weights_path, map_location=DEVICE))
 
-    def train(self, train_dataset):
+    @staticmethod
+    def from_pretrained(model_dir):
+        config_file = os.path.join(model_dir, "config.json")
+        with open(config_file, "r") as f_config:
+            config = json.load(f_config)
+
+        created_model = BertController(**config)
+        created_model.load_checkpoint()
+        return created_model
+
+    def train_epoch(self, train_dataset):
         self.model.train()
         total_num_batches = (len(train_dataset) + self.batch_size - 1) // self.batch_size
         train_loss = 0.0
@@ -177,28 +205,31 @@ class BertController:
 
         return train_loss / total_num_batches
 
-    def validate(self, dev_dataset):
-        with torch.no_grad():
-            self.model.eval()
-            total_num_batches = (len(dev_dataset) + self.batch_size - 1) // self.batch_size
-            dev_loss = 0.0
-            num_correct = 0
+    @torch.no_grad()
+    def evaluate(self, dev_dataset):
+        self.model.eval()
+        total_num_batches = (len(dev_dataset) + self.batch_size - 1) // self.batch_size
+        dev_loss = 0.0
+        num_correct = 0
+        preds = []
 
-            for curr_batch in tqdm(DataLoader(dev_dataset, batch_size=self.batch_size, shuffle=False)):
-                batch_labels = curr_batch["labels"].to(DEVICE)
-                del curr_batch["labels"]
-                logits = self.model(**curr_batch)  # [B, num_labels]
+        for curr_batch in tqdm(DataLoader(dev_dataset, batch_size=self.batch_size, shuffle=False)):
+            batch_labels = curr_batch["labels"].to(DEVICE)
+            del curr_batch["labels"]
+            logits = self.model(**curr_batch)  # [B, num_labels]
 
-                curr_loss = self.loss(logits, batch_labels)
-                dev_loss += float(curr_loss)
+            curr_loss = self.loss(logits, batch_labels)
+            dev_loss += float(curr_loss)
 
-                label_preds = torch.argmax(logits, dim=1)
-                num_correct += int(torch.sum(label_preds == batch_labels))
+            label_preds = torch.argmax(logits, dim=1)
+            preds.append(label_preds.cpu())
+            num_correct += int(torch.sum(label_preds == batch_labels))
 
-            return {
-                "loss": dev_loss / total_num_batches,
-                "accuracy": num_correct / len(dev_dataset)
-            }
+        return {
+            "preds": torch.cat(preds) if len(preds) > 0 else torch.tensor([]),
+            "loss": dev_loss / max(1, total_num_batches),
+            "accuracy": num_correct / max(1, len(dev_dataset))
+        }
 
     def fit(self, train_dataset, num_epochs, dev_dataset=None):
         best_dev_acc, rounds_no_increase = 0.0, 0
@@ -215,7 +246,7 @@ class BertController:
                 curr_subset = Subset(train_dataset, shuffled_indices[idx_miniset * self.validate_every_n_steps:
                                                                      (idx_miniset + 1) * self.validate_every_n_steps])
 
-                train_loss = self.train(curr_subset)
+                train_loss = self.train_epoch(curr_subset)
                 log_to_stdout(f"Training loss: {train_loss: .4f}")
 
                 if dev_dataset is None or len(curr_subset) < self.validate_every_n_steps // 2:
@@ -223,13 +254,12 @@ class BertController:
                                   f"({len(curr_subset)} examples)")
                     continue
 
-                dev_metrics = self.validate(dev_dataset)
+                dev_metrics = self.evaluate(dev_dataset)
                 log_to_stdout(f"Validation accuracy: {dev_metrics['accuracy']:.4f}")
                 if dev_metrics["accuracy"] > best_dev_acc:
                     best_dev_acc, rounds_no_increase = dev_metrics["accuracy"], 0
-                    log_to_stdout(f"New best, saving checkpoint TODO")
-                    # TODO: save checkpoint
-                    # ...
+                    log_to_stdout(f"New best, saving checkpoint")
+                    self.save_checkpoint()
                 else:
                     rounds_no_increase += 1
 
@@ -242,58 +272,79 @@ class BertController:
             if stop_early:
                 break
 
+        self.load_checkpoint()
         log_to_stdout(f"Training took {time.time() - t_start: .3f}s")
+
+    def predict(self, test_dataset):
+        """ Just a convenience method, see `<BertController>.evaluate()`. """
+        return self.evaluate(test_dataset)
 
 
 if __name__ == "__main__":
-    from utils import BertDataset, UFEATS2IDX
+    from utils import BertDataset
     from transformers import BertTokenizer
-    import json
     import pandas as pd
     args = parser.parse_args()
 
     tokenizer = BertTokenizer.from_pretrained(args.pretrained_model_name_or_path)
+    trainer = None
+    if args.model_dir is not None:
+        logging.info("Loading pretrained morphological BERT model")
+        trainer = BertController.from_pretrained(args.model_dir)
 
-    log_to_stdout("Loading training dataset")
-    train_df = pd.read_csv(args.train_path)
-    train_features = list(map(lambda features_str: json.loads(features_str), train_df["features"].values))
-    train_dataset = BertDataset(sequences=train_df["content"].values,
-                                labels=train_df["target"].values,
-                                tokenizer=tokenizer,
-                                max_seq_len=args.max_seq_len,
-                                additional_features=train_features,
-                                ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
+    if args.mode == "train":
+        log_to_stdout("Loading training dataset")
+        train_df = pd.read_csv(args.train_path)
+        train_features = list(map(lambda features_str: json.loads(features_str), train_df["features"].values))
+        train_dataset = BertDataset(sequences=train_df["content"].values,
+                                    labels=train_df["target"].values,
+                                    tokenizer=tokenizer,
+                                    max_seq_len=args.max_seq_len,
+                                    additional_features=train_features,
+                                    ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
 
-    dev_df, dev_features, dev_dataset = None, None, None
-    if args.dev_path:
-        log_to_stdout("Loading validation dataset")
-        dev_df = pd.read_csv(args.dev_path)
-        dev_features = list(map(lambda features_str: json.loads(features_str), dev_df["features"].values))
-        dev_dataset = BertDataset(sequences=dev_df["content"].values,
-                                  labels=dev_df["target"].values,
-                                  tokenizer=tokenizer,
-                                  max_seq_len=args.max_seq_len,
-                                  additional_features=dev_features,
-                                  ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
+        dev_dataset = None
+        if args.dev_path:
+            log_to_stdout("Loading validation dataset")
+            dev_df = pd.read_csv(args.dev_path)
+            dev_features = list(map(lambda features_str: json.loads(features_str), dev_df["features"].values))
+            dev_dataset = BertDataset(sequences=dev_df["content"].values,
+                                      labels=dev_df["target"].values,
+                                      tokenizer=tokenizer,
+                                      max_seq_len=args.max_seq_len,
+                                      additional_features=dev_features,
+                                      ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
 
-    num_labels = len(train_df["target"].value_counts())
+        num_labels = len(train_df["target"].value_counts())
 
-    feature_sizes = {}
-    if args.include_upostag:
-        feature_sizes["upostag"] = args.upostag_emb_size
+        feature_sizes = {}
+        if args.include_upostag:
+            feature_sizes["upostag"] = args.upostag_emb_size
 
-    if args.include_ufeats:
-        for f in list(UFEATS2IDX.keys()):
-            feature_sizes[f] = args.ufeats_emb_size
-
-    trainer = BertController(model_name=args.model_name,
-                             num_labels=num_labels,
-                             batch_size=args.batch_size,
-                             dropout=args.dropout,
-                             lr=args.lr,
-                             early_stopping_rounds=args.early_stopping_rounds,
-                             validate_every_n_steps=args.validate_every_n_examples,
-                             pretrained_model_name_or_path=args.pretrained_model_name_or_path,
-                             additional_features=feature_sizes,
-                             pooling_type=args.pooling_type)
-    trainer.fit(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
+        if args.include_ufeats:
+            for f in list(UFEATS2IDX.keys()):
+                feature_sizes[f] = args.ufeats_emb_size
+        if trainer is None:
+            trainer = BertController(model_name=args.model_name,
+                                     num_labels=num_labels,
+                                     batch_size=args.batch_size,
+                                     dropout=args.dropout,
+                                     lr=args.lr,
+                                     early_stopping_rounds=args.early_stopping_rounds,
+                                     validate_every_n_steps=args.validate_every_n_examples,
+                                     pretrained_model_name_or_path=args.pretrained_model_name_or_path,
+                                     additional_features=feature_sizes,
+                                     pooling_type=args.pooling_type)
+        trainer.fit(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
+    else:
+        log_to_stdout("Loading test dataset")
+        test_df = pd.read_csv(args.test_path)
+        test_features = list(map(lambda features_str: json.loads(features_str), test_df["features"].values))
+        test_dataset = BertDataset(sequences=test_df["content"].values,
+                                   labels=test_df["target"].values,
+                                   tokenizer=tokenizer,
+                                   max_seq_len=args.max_seq_len,
+                                   additional_features=test_features,
+                                   ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
+        res = trainer.predict(test_dataset)
+        log_to_stdout(f"Test accuracy: {res['accuracy']: .4f}")
