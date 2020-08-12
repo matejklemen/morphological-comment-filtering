@@ -162,6 +162,7 @@ class BertController:
         params.update({
             "model_name": self.model_name,
             "batch_size": self.batch_size,
+            "lr": self.lr,
             "early_stopping_rounds": self.early_stopping_rounds,
             "validate_every_n_steps": self.validate_every_n_steps
         })
