@@ -170,6 +170,8 @@ class LSTMController:
         self.loss = nn.CrossEntropyLoss()
         self.optimizer = optim.AdamW(self.model.parameters(), lr=lr)
 
+        log_to_stdout(f"Configuration: \n{json.dumps(self.config, indent=4)}")
+
         config_path = os.path.join(self.model_dir, "config.json")
         if not os.path.exists(config_path):  # don't override existing config file (if using `from_pretrained()`)
             with open(config_path, "w") as f_config:
