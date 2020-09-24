@@ -7,9 +7,9 @@ import pandas as pd
 import os
 import argparse
 import json
+import stanza
 
 from conllu import parse
-from ufal.udpipe import Model, Pipeline, ProcessingError
 from tqdm import tqdm
 from utils import PAD
 
@@ -22,8 +22,6 @@ parser.add_argument("--target_column", type=str, default="infringed_on_rule",
                     help="Column of csv in which the text to be processed is stored")
 parser.add_argument("--target_dir", type=str, default="preprocessed",
                     help="DIRECTORY where processed data should be stored")
-parser.add_argument("--ud_model_path", type=str, default="models/croatian-set-ud-2.4-190531.udpipe",
-                    help="Path to the universal dependencies model which is to be used for obtaining features")
 
 
 def process_conllu(conllu_data):
@@ -46,23 +44,49 @@ def process_conllu(conllu_data):
     return processed
 
 
+def extract_features(stanza_output):
+    """ Filter the result returned by a stanza Pipeline, keeping only 'form' (raw word), 'upostag' and universal
+    features (if present)"""
+    # features of tokens inside sentence(s): each sentence is a list of dicts, containing token features
+    relevant_features = []
+    for curr_sent in stanza_output.sentences:
+        sent_features = []
+        for curr_token in curr_sent.tokens:
+            processed_feats = {"form": curr_token.text}
+
+            # Note: if FEATURES are not predicted for token, they will not be present in dict, whereas if POS TAG is not
+            # predicted, a generic PAD gets written
+            token_feats = curr_token.words[0].feats
+            if token_feats is not None:
+                for feat_val_pair in token_feats.split("|"):
+                    feat, val = feat_val_pair.split("=")
+                    processed_feats[feat] = val
+
+            token_upos = curr_token.words[0].upos
+            if token_upos is None:
+                token_upos = PAD
+
+            processed_feats["upostag"] = token_upos
+            sent_features.append(processed_feats)
+        relevant_features.append(sent_features)
+
+    return relevant_features
+
+
 if __name__ == "__main__":
     args = parser.parse_args()
 
     df = pd.read_csv(args.data_path)
-    err = ProcessingError()
-    model = Model.load(args.ud_model_path)
-    if not model:
-        print(f"Could not load model from {args.ud_model_path}")
-        exit(1)
-    pipeline = Pipeline(model, "tokenize", Pipeline.DEFAULT, Pipeline.DEFAULT, "conllu")
+    # stanza.download("hr", processors="tokenize,pos", package="ftb")
+    nlp = stanza.Pipeline(lang='en', processors='tokenize,pos', package="ewt")
 
     features = []
     for idx_ex in tqdm(range(df.shape[0])):
         curr_ex = df.iloc[idx_ex][args.data_column]
-        # outputs UPOS/XPOS tags, universal features, ... in conllu format, convert it to JSON
-        res = pipeline.process(curr_ex, err)
-        features.append(json.dumps(process_conllu(res)))
+        output = nlp(curr_ex)
+        ex_features = extract_features(output)
+
+        features.append(json.dumps(ex_features))
 
     if not os.path.exists(args.target_dir):
         print("Warning: creating directory to store processed data")
