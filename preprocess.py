@@ -19,7 +19,7 @@ parser.add_argument("--data_path", type=str, default=os.path.join("clean_vs_hate
 parser.add_argument("--data_column", type=str, default="content",
                     help="Column of csv in which the text to be processed is stored")
 parser.add_argument("--target_column", type=str, default="infringed_on_rule",
-                    help="Column of csv in which the text to be processed is stored")
+                    help="Column of csv in which the target label is stored")
 parser.add_argument("--target_dir", type=str, default="preprocessed",
                     help="DIRECTORY where processed data should be stored")
 
