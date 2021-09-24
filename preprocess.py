@@ -14,6 +14,10 @@ from tqdm import tqdm
 from utils import PAD
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--lang", type=str, default="en",
+                    help="2-letter code (ISO 639-1) of used language")
+parser.add_argument("--package", type=str, default="default",
+                    help="Name of the used processor for POS/ufeats tagging")
 parser.add_argument("--data_path", type=str, default=os.path.join("clean_vs_hate_speech", "val.csv"),
                     help="PATH to your data")
 parser.add_argument("--data_column", type=str, default="content",
@@ -74,11 +78,13 @@ def extract_features(stanza_output):
 
 
 if __name__ == "__main__":
+    import torch
     args = parser.parse_args()
 
     df = pd.read_csv(args.data_path)
-    # stanza.download("hr", processors="tokenize,pos", package="ftb")
-    nlp = stanza.Pipeline(lang='en', processors='tokenize,pos', package="ewt")
+    # hr - ftb, en - ewt
+    nlp = stanza.Pipeline(lang=args.lang, processors='tokenize,pos', package=args.package,
+                          use_gpu=torch.cuda.is_available())
 
     features = []
     for idx_ex in tqdm(range(df.shape[0])):
