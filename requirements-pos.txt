@@ -1,2 +1,2 @@
-ufal.udpipe
+stanza
 conllu

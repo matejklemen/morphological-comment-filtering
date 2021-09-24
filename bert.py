@@ -3,11 +3,13 @@ import json
 import logging
 import os
 import time
+import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 from transformers import BertModel
@@ -25,9 +27,9 @@ log_to_stdout(f"Using device {DEVICE}")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--mode", type=str, choices=["train", "evaluate"], required=True)
-parser.add_argument("--train_path", type=str, default="preprocessed/train.csv")
-parser.add_argument("--dev_path", type=str, default="preprocessed/val.csv")
-parser.add_argument("--test_path", type=str, default="preprocessed/test.csv")
+parser.add_argument("--train_path", type=str, default="preprocessed/GER-GermEval/train.csv")
+parser.add_argument("--dev_path", type=str, default="preprocessed/GER-GermEval/dev.csv")
+parser.add_argument("--test_path", type=str, default="preprocessed/GER-GermEval/test.csv")
 parser.add_argument("--model_dir", type=str, default=None,
                     help="Directory of the trained morphological BERT. Required for evaluation")
 
@@ -40,8 +42,9 @@ parser.add_argument("--num_epochs", type=int, default=5)
 parser.add_argument("--lr", type=float, default=2e-5)
 parser.add_argument("--dropout", type=float, default=0.2)
 parser.add_argument("--early_stopping_rounds", type=int, default=5)
-parser.add_argument("--validate_every_n_examples", type=int, default=5_000)
+parser.add_argument("--validate_every_n_examples", type=int, default=1000)
 parser.add_argument("--max_seq_len", type=int, default=10)
+parser.add_argument("--validation_metric", type=str, choices=["accuracy_score", "f1_score"], default="accuracy_score")
 
 parser.add_argument("--include_upostag", action="store_true")
 parser.add_argument("--upostag_emb_size", type=int, default=50)
@@ -100,9 +103,10 @@ class MorphologicalBertForSequenceClassification(nn.Module):
 
     def forward(self, input_ids, token_type_ids, attention_mask, **kwargs):
         # Classic BERT sequence classification settings: last layer's hidden state for [CLS] token: [B, hidden_size]
-        _, pooled_output = self.bert_model(input_ids=input_ids.to(DEVICE),
-                                           token_type_ids=token_type_ids.to(DEVICE),
-                                           attention_mask=attention_mask.to(DEVICE))
+        res = self.bert_model(input_ids=input_ids.to(DEVICE),
+                              token_type_ids=token_type_ids.to(DEVICE),
+                              attention_mask=attention_mask.to(DEVICE))
+        pooled_output = res["pooler_output"]
 
         # Concatenate pooled POS tag / universal features embeddings for sequence to BERT sequence representation
         additional_processed = []
@@ -125,7 +129,7 @@ class MorphologicalBertForSequenceClassification(nn.Module):
 class BertController:
     def __init__(self, num_labels, batch_size=16, dropout=0.2, lr=2e-5, early_stopping_rounds=5,
                  validate_every_n_steps=5_000, model_name=None, pretrained_model_name_or_path=None,
-                 additional_features=None, pooling_type=None):
+                 additional_features=None, pooling_type=None, early_stopping_metric="accuracy_score"):
         """ `additional_features` is a dict with names and embedding sizes of additional features to consider"""
         self.model_name = time.strftime("%Y%m%d_%H%M%S") if model_name is None else model_name
         self.model_dir = os.path.join(DEFAULT_MODEL_DIR, self.model_name)
@@ -141,6 +145,18 @@ class BertController:
         if self.pretrained_model_name_or_path is None:
             logging.warning("A pretrained model name or path was not specified, defaulting to base uncased mBERT")
             self.pretrained_model_name_or_path = "bert-base-multilingual-uncased"
+
+        self.early_stopping_metric = early_stopping_metric
+        if early_stopping_metric == "accuracy_score":
+            self._dev_metric_fn = accuracy_score
+        elif early_stopping_metric == "f1_score":
+            # F1 score for imbalanced data: weigh classes by their proportions
+            def _f1(y_true, y_pred):
+                return f1_score(y_true, y_pred, average="weighted")
+
+            self._dev_metric_fn = _f1
+        else:
+            raise NotImplementedError(f"Unsupported metric: '{early_stopping_metric}'")
 
         self.model = MorphologicalBertForSequenceClassification(num_labels=num_labels,
                                                                 dropout=dropout,
@@ -165,6 +181,7 @@ class BertController:
             "model_name": self.model_name,
             "batch_size": self.batch_size,
             "lr": self.lr,
+            "early_stopping_metric": self.early_stopping_metric,
             "early_stopping_rounds": self.early_stopping_rounds,
             "validate_every_n_steps": self.validate_every_n_steps
         })
@@ -215,6 +232,7 @@ class BertController:
         dev_loss = 0.0
         num_correct = 0
         preds = []
+        correct = []
 
         for curr_batch in tqdm(DataLoader(dev_dataset, batch_size=self.batch_size, shuffle=False)):
             batch_labels = curr_batch["labels"].to(DEVICE)
@@ -226,16 +244,21 @@ class BertController:
 
             label_preds = torch.argmax(logits, dim=1)
             preds.append(label_preds.cpu())
+            correct.append(batch_labels.cpu().tolist())
             num_correct += int(torch.sum(label_preds == batch_labels))
 
+        np_preds = np.concatenate(preds) if len(preds) > 0 else np.array([], dtype=np.int32)
+        np_correct = np.concatenate(correct) if len(correct) > 0 else np.array([], dtype=np.int32)
+
         return {
-            "preds": torch.cat(preds) if len(preds) > 0 else torch.tensor([]),
+            "preds": torch.from_numpy(np_preds),
             "loss": dev_loss / max(1, total_num_batches),
-            "accuracy": num_correct / max(1, len(dev_dataset))
+            "accuracy_score": accuracy_score(np_preds, np_correct),
+            "f1_score": f1_score(np_preds, np_correct, average="weighted")
         }
 
     def fit(self, train_dataset, num_epochs, dev_dataset=None):
-        best_dev_acc, rounds_no_increase = 0.0, 0
+        best_dev_metric, rounds_no_increase = 0.0, 0
         stop_early = False
 
         t_start = time.time()
@@ -258,9 +281,9 @@ class BertController:
                     continue
 
                 dev_metrics = self.evaluate(dev_dataset)
-                log_to_stdout(f"Validation accuracy: {dev_metrics['accuracy']:.4f}")
-                if dev_metrics["accuracy"] > best_dev_acc:
-                    best_dev_acc, rounds_no_increase = dev_metrics["accuracy"], 0
+                log_to_stdout(f"Validation {self.early_stopping_metric}: {dev_metrics[self.early_stopping_metric]:.4f}")
+                if dev_metrics[self.early_stopping_metric] > best_dev_metric:
+                    best_dev_metric, rounds_no_increase = dev_metrics[self.early_stopping_metric], 0
                     log_to_stdout(f"New best, saving checkpoint")
                     self.save_checkpoint()
                 else:
@@ -268,7 +291,7 @@ class BertController:
 
                 if rounds_no_increase == self.early_stopping_rounds:
                     log_to_stdout(f"Stopping early after no improvement for {rounds_no_increase} checks")
-                    log_to_stdout(f"Best accuracy: {best_dev_acc:.4f}")
+                    log_to_stdout(f"Best {self.early_stopping_metric}: {best_dev_metric:.4f}")
                     stop_early = True
                     break
 
@@ -337,7 +360,8 @@ if __name__ == "__main__":
                                      validate_every_n_steps=args.validate_every_n_examples,
                                      pretrained_model_name_or_path=args.pretrained_model_name_or_path,
                                      additional_features=feature_sizes,
-                                     pooling_type=args.pooling_type)
+                                     pooling_type=args.pooling_type,
+                                     early_stopping_metric=args.validation_metric)
         trainer.fit(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
     else:
         log_to_stdout("Loading test dataset")
@@ -350,4 +374,5 @@ if __name__ == "__main__":
                                    additional_features=test_features,
                                    ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
         res = trainer.predict(test_dataset)
-        log_to_stdout(f"Test accuracy: {res['accuracy']: .4f}")
+        log_to_stdout(f"Test accuracy: {res['accuracy_score']: .4f}")
+        log_to_stdout(f"Test (weighted) F1: {res['f1_score']: .4f}")
