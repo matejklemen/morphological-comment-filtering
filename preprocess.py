@@ -14,17 +14,17 @@ from tqdm import tqdm
 from utils import PAD
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--lang", type=str, default="en",
+parser.add_argument("--lang", type=str, default="de",
                     help="2-letter code (ISO 639-1) of used language")
 parser.add_argument("--package", type=str, default="default",
                     help="Name of the used processor for POS/ufeats tagging")
-parser.add_argument("--data_path", type=str, default=os.path.join("clean_vs_hate_speech", "val.csv"),
+parser.add_argument("--data_path", type=str, default="/home/matej/Documents/embeddia/morphological-additions/morphological-comment-filtering/data/GER/test.csv",
                     help="PATH to your data")
 parser.add_argument("--data_column", type=str, default="content",
                     help="Column of csv in which the text to be processed is stored")
-parser.add_argument("--target_column", type=str, default="infringed_on_rule",
+parser.add_argument("--target_column", type=str, default="target",
                     help="Column of csv in which the target label is stored")
-parser.add_argument("--target_dir", type=str, default="preprocessed",
+parser.add_argument("--target_dir", type=str, default="preprocessed/GER",
                     help="DIRECTORY where processed data should be stored")
 
 
@@ -55,18 +55,18 @@ def extract_features(stanza_output):
     relevant_features = []
     for curr_sent in stanza_output.sentences:
         sent_features = []
-        for curr_token in curr_sent.tokens:
+        for curr_token in curr_sent.words:
             processed_feats = {"form": curr_token.text}
 
             # Note: if FEATURES are not predicted for token, they will not be present in dict, whereas if POS TAG is not
             # predicted, a generic PAD gets written
-            token_feats = curr_token.words[0].feats
+            token_feats = curr_token.feats
             if token_feats is not None:
                 for feat_val_pair in token_feats.split("|"):
                     feat, val = feat_val_pair.split("=")
                     processed_feats[feat] = val
 
-            token_upos = curr_token.words[0].upos
+            token_upos = curr_token.upos
             if token_upos is None:
                 token_upos = PAD
 
