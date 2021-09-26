@@ -87,11 +87,19 @@ if __name__ == "__main__":
                           use_gpu=torch.cuda.is_available())
 
     features = []
+    take_mask = []
     for idx_ex in tqdm(range(df.shape[0])):
         curr_ex = df.iloc[idx_ex][args.data_column]
-        output = nlp(curr_ex)
+        try:
+            output = nlp(curr_ex)
+        except RuntimeError:
+            # Undiagnosed stanza error
+            print(f"Skipping example #{idx_ex}: '{curr_ex}'")
+            take_mask.append(False)
+            continue
         ex_features = extract_features(output)
 
+        take_mask.append(True)
         features.append(json.dumps(ex_features))
 
     if not os.path.exists(args.target_dir):
@@ -102,6 +110,7 @@ if __name__ == "__main__":
     file_name = args.data_path.split(os.sep)[-1]
     target_path = os.path.join(args.target_dir, file_name)
 
+    df = df.loc[take_mask].reset_index(drop=True)
     df["features"] = features
     df = df.rename({args.data_column: "content", args.target_column: "target"}, axis=1)
     df.to_csv(os.path.join(args.target_dir, file_name), index=False)
