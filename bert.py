@@ -152,7 +152,7 @@ class BertController:
         elif early_stopping_metric == "f1_score":
             # F1 score for imbalanced data: weigh classes by their proportions
             def _f1(y_true, y_pred):
-                return f1_score(y_true, y_pred, average="weighted")
+                return f1_score(y_true, y_pred, average="macro")
 
             self._dev_metric_fn = _f1
         else:
@@ -254,7 +254,7 @@ class BertController:
             "preds": torch.from_numpy(np_preds),
             "loss": dev_loss / max(1, total_num_batches),
             "accuracy_score": accuracy_score(np_preds, np_correct),
-            "f1_score": f1_score(np_preds, np_correct, average="weighted")
+            "f1_score": f1_score(np_preds, np_correct, average="macro")
         }
 
     def fit(self, train_dataset, num_epochs, dev_dataset=None):
@@ -375,4 +375,4 @@ if __name__ == "__main__":
                                    ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
         res = trainer.predict(test_dataset)
         log_to_stdout(f"Test accuracy: {res['accuracy_score']: .4f}")
-        log_to_stdout(f"Test (weighted) F1: {res['f1_score']: .4f}")
+        log_to_stdout(f"Test (macro) F1: {res['f1_score']: .4f}")
