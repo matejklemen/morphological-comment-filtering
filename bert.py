@@ -2,9 +2,10 @@ import argparse
 import json
 import logging
 import os
+import sys
 import time
-import numpy as np
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,9 +18,7 @@ from transformers import BertModel
 from pooling import MaskedMeanPooler, WeightedSumPooler, LSTMPooler
 from utils import UPOS2IDX, UFEATS2IDX, PAD, DEFAULT_POOLING_TYPE, DEFAULT_MODEL_DIR
 
-# A bit of a hack so that `print` is used instead of `log` on kaggle since that doesn't seem to work properly there
-is_kaggle = os.path.exists("/kaggle/input")
-log_to_stdout = print if is_kaggle else logging.info
+log_to_stdout = logging.info
 
 logging.basicConfig(level=logging.INFO)
 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -291,7 +290,6 @@ class BertController:
 
                 if rounds_no_increase == self.early_stopping_rounds:
                     log_to_stdout(f"Stopping early after no improvement for {rounds_no_increase} checks")
-                    log_to_stdout(f"Best {self.early_stopping_metric}: {best_dev_metric:.4f}")
                     stop_early = True
                     break
 
@@ -299,6 +297,7 @@ class BertController:
                 break
 
         self.load_checkpoint()
+        log_to_stdout(f"Best {self.early_stopping_metric}: {best_dev_metric:.4f}")
         log_to_stdout(f"Training took {time.time() - t_start: .3f}s")
 
     def predict(self, test_dataset):
@@ -311,14 +310,25 @@ if __name__ == "__main__":
     from transformers import BertTokenizer
     import pandas as pd
     args = parser.parse_args()
+    logger = logging.getLogger()
+    logger.addHandler(logging.StreamHandler(sys.stdout))
 
     tokenizer = BertTokenizer.from_pretrained(args.pretrained_model_name_or_path)
     trainer = None
+    eff_model_name = None
     if args.model_dir is not None:
-        logging.info("Loading pretrained morphological BERT model")
+        log_to_stdout("Loading pretrained morphological BERT model")
         trainer = BertController.from_pretrained(args.model_dir)
+        eff_model_dir = args.model_dir
+    else:
+        eff_model_name = time.strftime("%Y%m%d_%H%M%S") if args.model_name is None else args.model_name
+        log_to_stdout(os.path.join(DEFAULT_MODEL_DIR, eff_model_name))
+        eff_model_dir = os.path.join(DEFAULT_MODEL_DIR, eff_model_name)
+        os.makedirs(eff_model_dir)
+        log_to_stdout(f"Using model name '{eff_model_name}' and model dir '{eff_model_dir}'")
 
     if args.mode == "train":
+        logger.addHandler(logging.FileHandler(os.path.join(eff_model_dir, "train.log")))
         log_to_stdout("Loading training dataset")
         train_df = pd.read_csv(args.train_path)
         train_features = list(map(lambda features_str: json.loads(features_str), train_df["features"].values))
@@ -351,7 +361,7 @@ if __name__ == "__main__":
             for f in list(UFEATS2IDX.keys()):
                 feature_sizes[f] = args.ufeats_emb_size
         if trainer is None:
-            trainer = BertController(model_name=args.model_name,
+            trainer = BertController(model_name=eff_model_name,
                                      num_labels=num_labels,
                                      batch_size=args.batch_size,
                                      dropout=args.dropout,
@@ -364,7 +374,8 @@ if __name__ == "__main__":
                                      early_stopping_metric=args.validation_metric)
         trainer.fit(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
     else:
-        log_to_stdout("Loading test dataset")
+        logger.addHandler(logging.FileHandler(os.path.join(eff_model_dir, "evaluate.log")))
+        log_to_stdout(f"Loading test dataset '{args.test_path}'")
         test_df = pd.read_csv(args.test_path)
         test_features = list(map(lambda features_str: json.loads(features_str), test_df["features"].values))
         test_dataset = BertDataset(sequences=test_df["content"].values,
