@@ -385,5 +385,7 @@ if __name__ == "__main__":
                                    additional_features=test_features,
                                    ufeats_names=list(UFEATS2IDX.keys()) if args.include_ufeats else None)
         res = trainer.predict(test_dataset)
+        pd.DataFrame({"predicted_target": res["preds"].tolist()}).to_csv(os.path.join(eff_model_dir, "predictions.csv"),
+                                                                         index=False)
         log_to_stdout(f"Test accuracy: {res['accuracy_score']: .4f}")
         log_to_stdout(f"Test (macro) F1: {res['f1_score']: .4f}")
