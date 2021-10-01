@@ -227,13 +227,15 @@ class BertController:
     @torch.no_grad()
     def evaluate(self, dev_dataset):
         self.model.eval()
-        total_num_batches = (len(dev_dataset) + self.batch_size - 1) // self.batch_size
+        dev_batch_size = 2 * self.batch_size
+
+        total_num_batches = (len(dev_dataset) + dev_batch_size - 1) // dev_batch_size
         dev_loss = 0.0
         num_correct = 0
         preds = []
         correct = []
 
-        for curr_batch in tqdm(DataLoader(dev_dataset, batch_size=self.batch_size, shuffle=False)):
+        for curr_batch in tqdm(DataLoader(dev_dataset, batch_size=dev_batch_size, shuffle=False)):
             batch_labels = curr_batch["labels"].to(DEVICE)
             del curr_batch["labels"]
             logits = self.model(**curr_batch)  # [B, num_labels]
