@@ -146,15 +146,7 @@ class BertController:
             self.pretrained_model_name_or_path = "bert-base-multilingual-uncased"
 
         self.early_stopping_metric = early_stopping_metric
-        if early_stopping_metric == "accuracy_score":
-            self._dev_metric_fn = accuracy_score
-        elif early_stopping_metric == "f1_score":
-            # F1 score for imbalanced data: weigh classes by their proportions
-            def _f1(y_true, y_pred):
-                return f1_score(y_true, y_pred, average="macro")
-
-            self._dev_metric_fn = _f1
-        else:
+        if early_stopping_metric not in ["accuracy_score", "f1_score"]:
             raise NotImplementedError(f"Unsupported metric: '{early_stopping_metric}'")
 
         self.model = MorphologicalBertForSequenceClassification(num_labels=num_labels,
