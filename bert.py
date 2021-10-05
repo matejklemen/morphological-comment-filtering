@@ -26,9 +26,9 @@ log_to_stdout(f"Using device {DEVICE}")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--mode", type=str, choices=["train", "evaluate"], required=True)
-parser.add_argument("--train_path", type=str, default="preprocessed/GER-GermEval/train.csv")
-parser.add_argument("--dev_path", type=str, default="preprocessed/GER-GermEval/dev.csv")
-parser.add_argument("--test_path", type=str, default="preprocessed/GER-GermEval/test.csv")
+parser.add_argument("--train_path", type=str, default="preprocessed/GER/train.csv")
+parser.add_argument("--dev_path", type=str, default="preprocessed/GER/dev.csv")
+parser.add_argument("--test_path", type=str, default="preprocessed/GER/test.csv")
 parser.add_argument("--model_dir", type=str, default=None,
                     help="Directory of the trained morphological BERT. Required for evaluation")
 
