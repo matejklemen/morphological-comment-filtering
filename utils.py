@@ -216,7 +216,7 @@ class BertDataset(Dataset):
 
         for i in range(len(sequences)):
             curr_encoded = tokenizer.encode_plus(sequences[i], max_length=max_seq_len,
-                                                 pad_to_max_length=True,
+                                                 padding="max_length",
                                                  truncation=True,
                                                  truncation_strategy="only_first")
             self.inputs.append(curr_encoded["input_ids"])
