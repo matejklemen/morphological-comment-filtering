@@ -44,6 +44,7 @@ parser.add_argument("--dropout", type=float, default=0.2)
 parser.add_argument("--early_stopping_rounds", type=int, default=5)
 parser.add_argument("--validate_every_n_examples", type=int, default=5_000)
 parser.add_argument("--max_seq_len", type=int, default=76)
+parser.add_argument("--validation_metric", type=str, choices=["accuracy_score", "f1_score"], default="accuracy_score")
 
 parser.add_argument("--include_upostag", action="store_true")
 parser.add_argument("--upostag_emb_size", type=int, default=50)
@@ -387,7 +388,8 @@ if __name__ == "__main__":
                                  early_stopping_rounds=args.early_stopping_rounds,
                                  validate_every_n_steps=args.validate_every_n_examples,
                                  additional_features=feature_sizes,
-                                 pooling_type=args.pooling_type)
+                                 pooling_type=args.pooling_type,
+                                 early_stopping_metric=args.validation_metric)
         trainer.fit(train_dataset, num_epochs=args.num_epochs, dev_dataset=dev_dataset)
     else:
         logger.addHandler(logging.FileHandler(os.path.join(eff_model_dir, "evaluate.log")))
