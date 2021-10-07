@@ -4,89 +4,91 @@ from torch.utils.data import Dataset
 from itertools import chain
 
 PAD = "<PAD>"  # used to pad sequences to common sequence length
+OTHR = "<OTHR>"  # non-universal (language specific) feature
 
 UPOS_TAGS = [PAD, "ADJ", "ADP", "ADV", "AUX", "CCONJ", "DET", "INTJ", "NOUN", "NUM", "PART", "PRON", "PROPN",
-             "PUNCT", "SCONJ", "SYM", "VERB", "X"]
+             "PUNCT", "SCONJ", "SYM", "VERB", "X", OTHR]
 UPOS2IDX = {tag: i for i, tag in enumerate(UPOS_TAGS)}
 IDX2UPOS = dict(enumerate(UPOS_TAGS))
 
 UFEATS2IDX = {
     "PronType": {
         tag: i for i, tag in enumerate([PAD, "Art", "Dem", "Emp", "Exc", "Ind", "Int", "Neg", "Prs", "Rcp", "Rel",
-                                        "Tot"])
+                                        "Tot", OTHR])
     },
     "NumType": {
-        tag: i for i, tag in enumerate([PAD, "Card", "Dist", "Frac", "Mult", "Ord", "Range", "Sets"])
+        tag: i for i, tag in enumerate([PAD, "Card", "Dist", "Frac", "Mult", "Ord", "Range", "Sets", OTHR])
     },
     "Poss": {
-        tag: i for i, tag in enumerate([PAD, "Yes"])
+        tag: i for i, tag in enumerate([PAD, "Yes", OTHR])
     },
     "Reflex": {
-        tag: i for i, tag in enumerate([PAD, "Yes"])
+        tag: i for i, tag in enumerate([PAD, "Yes", OTHR])
     },
     "Foreign": {
-        tag: i for i, tag in enumerate([PAD, "Yes"])
+        tag: i for i, tag in enumerate([PAD, "Yes", OTHR])
     },
     "Abbr": {
-        tag: i for i, tag in enumerate([PAD, "Yes"])
+        tag: i for i, tag in enumerate([PAD, "Yes", OTHR])
     },
     "Gender": {
-        tag: i for i, tag in enumerate([PAD, "Com", "Fem", "Masc", "Neut"])
+        tag: i for i, tag in enumerate([PAD, "Com", "Fem", "Masc", "Neut", OTHR])
     },
     "Animacy": {
-        tag: i for i, tag in enumerate([PAD, "Anim", "Hum", "Inan", "Nhum"])
+        tag: i for i, tag in enumerate([PAD, "Anim", "Hum", "Inan", "Nhum", OTHR])
     },
     "NounClass": {
         tag: i for i, tag in enumerate([PAD, "Bantu1", "Bantu2", "Bantu3", "Bantu4", "Bantu5",  "Bantu6", "Bantu7",
                                         "Bantu8", "Bantu9", "Bantu10", "Bantu11", "Bantu12", "Bantu13", "Bantu14",
-                                        "Bantu15", "Bantu16", "Bantu17", "Bantu18", "Bantu19", "Bantu20"])
+                                        "Bantu15", "Bantu16", "Bantu17", "Bantu18", "Bantu19", "Bantu20", OTHR])
     },
     "Number": {
         tag: i for i, tag in enumerate([PAD, "Coll", "Count", "Dual", "Grpa", "Grpl", "Inv", "Pauc", "Plur", "Ptan",
-                                        "Sing", "Tri"])
+                                        "Sing", "Tri", OTHR])
     },
     "Case": {
         tag: i for i, tag in enumerate([PAD, "Abs", "Acc", "Erg", "Nom", "Abe", "Ben", "Cau", "Cmp", "Cns", "Com",
                                         "Dat", "Dis", "Equ", "Gen", "Ins", "Par", "Tem", "Tra", "Voc", "Abl", "Add",
                                         "Ade", "All", "Del", "Ela", "Ess", "Ill", "Ine", "Lat", "Loc", "Per", "Sub",
-                                        "Sup", "Ter"])
+                                        "Sup", "Ter", OTHR])
     },
     "Definite": {
-        tag: i for i, tag in enumerate([PAD, "Com", "Cons", "Def", "Ind", "Spec"])
+        tag: i for i, tag in enumerate([PAD, "Com", "Cons", "Def", "Ind", "Spec", OTHR])
     },
     "Degree": {
-        tag: i for i, tag in enumerate([PAD, "Abs", "Cmp", "Equ", "Pos", "Sup"])
+        tag: i for i, tag in enumerate([PAD, "Abs", "Cmp", "Equ", "Pos", "Sup", OTHR])
     },
     "VerbForm": {
-        tag: i for i, tag in enumerate([PAD, "Conv", "Fin", "Gdv", "Ger", "Inf", "Part", "Sup", "Vnoun"])
+        tag: i for i, tag in enumerate([PAD, "Conv", "Fin", "Gdv", "Ger", "Inf", "Part", "Sup", "Vnoun", OTHR])
     },
     "Mood": {
         tag: i for i, tag in enumerate([PAD, "Adm", "Cnd", "Des", "Imp", "Ind", "Jus", "Nec", "Opt", "Pot", "Prp",
-                                        "Qot", "Sub"])
+                                        "Qot", "Sub", OTHR])
     },
     "Tense": {
-        tag: i for i, tag in enumerate([PAD, "Fut", "Imp", "Past", "Pqp", "Pres"])
+        tag: i for i, tag in enumerate([PAD, "Fut", "Imp", "Past", "Pqp", "Pres", OTHR])
     },
     "Aspect": {
-        tag: i for i, tag in enumerate([PAD, "Hab", "Imp", "Iter", "Perf", "Prog", "Prosp"])
+        tag: i for i, tag in enumerate([PAD, "Hab", "Imp", "Iter", "Perf", "Prog", "Prosp", OTHR])
     },
     "Voice": {
-        tag: i for i, tag in enumerate([PAD, "Act", "Antip", "Bfoc", "Cau", "Dir", "Inv", "Lfoc", "Mid", "Pass", "Rcp"])
+        tag: i for i, tag in enumerate([PAD, "Act", "Antip", "Bfoc", "Cau", "Dir", "Inv", "Lfoc", "Mid", "Pass", "Rcp",
+                                        OTHR])
     },
     "Evident": {
-        tag: i for i, tag in enumerate([PAD, "Fh", "Nfh"])
+        tag: i for i, tag in enumerate([PAD, "Fh", "Nfh", OTHR])
     },
     "Polarity": {
-        tag: i for i, tag in enumerate([PAD, "Neg", "Pos"])
+        tag: i for i, tag in enumerate([PAD, "Neg", "Pos", OTHR])
     },
     "Person": {
-        tag: i for i, tag in enumerate([PAD, "0", "1", "2", "3", "4"])
+        tag: i for i, tag in enumerate([PAD, "0", "1", "2", "3", "4", OTHR])
     },
     "Polite": {
-        tag: i for i, tag in enumerate([PAD, "Elev", "Form", "Humb", "Infm"])
+        tag: i for i, tag in enumerate([PAD, "Elev", "Form", "Humb", "Infm", OTHR])
     },
     "Clusivity": {
-        tag: i for i, tag in enumerate([PAD, "Ex", "In"])
+        tag: i for i, tag in enumerate([PAD, "Ex", "In", OTHR])
     }
 }
 
@@ -244,7 +246,7 @@ class BertDataset(Dataset):
 
                 curr_upos = token_info.get("upostag")
                 if curr_upos is not None:
-                    upos_features.extend([UPOS2IDX[curr_upos]] * len(curr_subwords))
+                    upos_features.extend([UPOS2IDX.get(curr_upos, UPOS2IDX[OTHR])] * len(curr_subwords))
                     upos_masks.extend([1] * len(curr_subwords))
 
                 for curr_ufeat_name in self.ufeats_names:
@@ -254,7 +256,9 @@ class BertDataset(Dataset):
                     if len(feat_values) > 1:
                         curr_ufeat = feat_values[0]
 
-                    encoded_ufeat = UFEATS2IDX[curr_ufeat_name][curr_ufeat]
+                    encoded_ufeat = UFEATS2IDX[curr_ufeat_name].get(curr_ufeat,
+                                                                    UFEATS2IDX[curr_ufeat_name][OTHR])
+
                     ufeats[curr_ufeat_name].extend([encoded_ufeat] * len(curr_subwords))
                     ufeats_masks[curr_ufeat_name].extend([curr_ufeat != PAD] * len(curr_subwords))
 
