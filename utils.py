@@ -129,7 +129,7 @@ class FastTextLSTMDataset(Dataset):
 
                 curr_upos = token_info.get("upostag")
                 if curr_upos is not None:
-                    upos_features.append(UPOS2IDX[curr_upos])
+                    upos_features.append(UPOS2IDX.get(curr_upos, UPOS2IDX[OTHR]))
                     upos_masks.append(1)
 
                 for curr_ufeat_name in self.ufeats_names:
@@ -139,7 +139,7 @@ class FastTextLSTMDataset(Dataset):
                     if len(feat_values) > 1:
                         curr_ufeat = feat_values[0]
 
-                    encoded_ufeat = UFEATS2IDX[curr_ufeat_name][curr_ufeat]
+                    encoded_ufeat = UFEATS2IDX[curr_ufeat_name].get(curr_ufeat, UFEATS2IDX[curr_ufeat_name][OTHR])
                     ufeats[curr_ufeat_name].append(encoded_ufeat)
                     ufeats_masks[curr_ufeat_name].append(curr_ufeat != PAD)
 
